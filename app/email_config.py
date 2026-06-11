@@ -1,19 +1,8 @@
-from fastapi_mail import FastMail, ConnectionConfig
+
+
+import resend
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
-conf = ConnectionConfig(
-    MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
-    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
-    MAIL_FROM=os.getenv("MAIL_FROM"),
-    MAIL_PORT=int(os.getenv("MAIL_PORT", 587)),  # ✅ Added default value
-    MAIL_SERVER=os.getenv("MAIL_SERVER"),
-    MAIL_STARTTLS=os.getenv("MAIL_STARTTLS", "True").lower() == "true",
-    MAIL_SSL_TLS=os.getenv("MAIL_SSL_TLS", "False").lower() == "true",
-    USE_CREDENTIALS=os.getenv("USE_CREDENTIALS", "True").lower() == "true",
-    VALIDATE_CERTS=False,
-)
-
-fastmail = FastMail(conf)
+resend.api_key = os.getenv("re_ALbrQtBX_2DPuEpoJK5ze3bgEhszfD4am")

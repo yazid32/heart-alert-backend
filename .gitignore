@@ -1,7 +1,14 @@
+
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
 venv/ 
 __pycache__/ 
 *.pyc 
-.env 
+.venv/
 .pytest_cache/ 
 .mypy_cache/ 
 uploads/ 

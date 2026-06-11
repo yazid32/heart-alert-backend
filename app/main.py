@@ -15,8 +15,8 @@ from app.auth_config import hash_password, verify_password, create_access_token,
 import re
 from datetime import datetime, timedelta
 import secrets
-from app.email_config import fastmail
-from fastapi_mail import MessageSchema
+import resend
+resend.api_key = os.getenv("re_ALbrQtBX_2DPuEpoJK5ze3bgEhszfD4am")
 from pydantic import BaseModel
 from typing import Optional
 from app.schemas import PatientCreate, PatientUpdate, PatientResponse, PatientListResponse, ProfileResponse
@@ -38,14 +38,23 @@ import httpx
 import os
 import dns.resolver
 from email_validator import validate_email, EmailNotValidError
-BACKEND_URL = "http://192.168.1.37:8000"
-NUMLOOKUP_API_KEY = os.getenv("NUMLOOKUP_API_KEY", "num_live_W6J7MFALIBspa09AgcfJrYE6jfo2LarOXuk6dRH4") 
+
+# Load environment variables from .env file FIRST
+from dotenv import load_dotenv
+load_dotenv()  # This loads your .env file
 # Pydantic models for request bodies
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 class PhoneVerificationRequest(BaseModel):
     phone_number: str
+
+
+# ========== CONFIGURATION FROM ENV ==========
+BACKEND_URL = os.getenv("BACKEND_URL")
+NUMLOOKUP_API_KEY = os.getenv("NUMLOOKUP_API_KEY")
+PHONE_VERIFICATION_ENABLED = os.getenv("PHONE_VERIFICATION_ENABLED", "True").lower() == "true"
+
 
 app = FastAPI(title="Heart Disease Prediction API")
 app.include_router(auth.router)
@@ -220,10 +229,11 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         # Send verification email
         try:
             verification_link = f"{BACKEND_URL}/verify-email-redirect?token={verification_token}"
-            message = MessageSchema(
-                subject="Verify Your Heart Alert Email Address",
-                recipients=[new_doctor.email],
-                body=f"""
+            resend.Emails.send({
+                "from": "Heart Alert <onboarding@resend.dev>",
+                "to": [new_doctor.email],
+                subject:"Verify Your Heart Alert Email Address",
+                html:f"""
                 <html>
                 <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
                     <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
@@ -243,9 +253,8 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
                     </div>
                 </body>
                 </html>
-                """,
-                subtype="html"
-            )
+                """
+            })
             await fastmail.send_message(message)
             print(f"✅ Verification email sent to {new_doctor.email}")
         except Exception as e:
@@ -354,11 +363,11 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
     print(f"{'='*50}\n")
     
     try:
-        message = MessageSchema(
-            subject="Reset Your Heart Alert Password",
-            recipients=[doctor.email],
-            body=f"""
-            <html>
+        resend.Emails.send({
+            "from": "Heart Alert <onboarding@resend.dev>",
+            "to": [doctor.email],
+            "subject": "Reset Your Heart Alert Password",
+            "html": f"""<html>
             <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
                 <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
                     <h2 style="color: #222;">Heart Alert</h2>
@@ -376,12 +385,9 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
                     <p style="color: #888; font-size: 13px;">If you didn't request this, ignore this email.</p>
                 </div>
             </body>
-            </html>
-            """,
-            subtype="html"
-        )
-        
-        await fastmail.send_message(message)
+            </html>"""
+        })
+
         print(f"✅ Email sent successfully to {doctor.email}")
         
     except Exception as e:
@@ -1613,10 +1619,11 @@ async def send_verification_email(
     verification_link = f"{BACKEND_URL}/verify-email-redirect?token={verification_token}"
     
     try:
-        message = MessageSchema(
-            subject="Verify Your Heart Alert Email Address",
-            recipients=[doctor.email],
-            body=f"""
+        resend.Emails.send({
+            "from": "Heart Alert <onboarding@resend.dev>",
+            "to": [doctor.email],
+            "subject": "Verify Your Heart Alert Email Address",
+            "html": f"""
             <html>
             <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
                 <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
@@ -1625,9 +1632,9 @@ async def send_verification_email(
                     <p style="color: #444;">Please verify your email address to complete your registration.</p>
                     <div style="text-align: center; margin: 32px 0;">
                         <a href="{verification_link}"
-                           style="background-color: #7A9E7E; color: white; padding: 14px 32px;
-                                  text-decoration: none; border-radius: 8px; font-size: 16px;
-                                  font-weight: bold; display: inline-block;">
+                        style="background-color: #7A9E7E; color: white; padding: 14px 32px;
+                                text-decoration: none; border-radius: 8px; font-size: 16px;
+                                font-weight: bold; display: inline-block;">
                             Verify Email
                         </a>
                     </div>
@@ -1636,11 +1643,8 @@ async def send_verification_email(
                 </div>
             </body>
             </html>
-            """,
-            subtype="html"
-        )
-        
-        await fastmail.send_message(message)
+            """
+        })
         print(f"✅ Verification email sent to {doctor.email}")
         
         return {"message": "Verification email sent", "already_verified": False}
