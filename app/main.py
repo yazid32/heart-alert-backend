@@ -19,7 +19,7 @@ from app.auth_config import hash_password, verify_password, create_access_token,
 import re
 from datetime import datetime, timedelta
 import secrets
-from app.email_config import send_email_sync as send_email
+from app.email_config import send_email
 from pydantic import BaseModel
 from typing import Optional
 from app.schemas import PatientCreate, PatientUpdate, PatientResponse, PatientListResponse, ProfileResponse

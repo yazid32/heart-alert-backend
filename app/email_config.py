@@ -3,7 +3,10 @@ import os
 from dotenv import load_dotenv
 import asyncio
 import nest_asyncio
+
+# Apply nest_asyncio to allow nested event loops
 nest_asyncio.apply()
+
 load_dotenv()
 
 BREVO_API_KEY = os.getenv("BREVO_API_KEY")
@@ -44,22 +47,10 @@ async def send_email_async(to: str, subject: str, html: str):
         return response.json()
 
 
-# Sync wrapper that works with existing event loop
-def send_email(to: str, subject: str, html: str):
-    """Sync wrapper for send_email_async"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    
-    if loop and loop.is_running():
-        # We're already in an event loop (FastAPI sync endpoint case)
-        import nest_asyncio
-        nest_asyncio.apply()
-        return asyncio.run_coroutine_threadsafe(
-            send_email_async(to, subject, html), 
-            loop
-        ).result()
-    else:
-        # No event loop running
-        return asyncio.run(send_email_async(to, subject, html))
+def send_email_sync(to: str, subject: str, html: str):
+    """Sync wrapper for send_email_async - for use in regular def endpoints"""
+    return asyncio.run(send_email_async(to, subject, html))
+
+
+# Alias for backward compatibility
+send_email = send_email_sync
