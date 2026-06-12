@@ -1,15 +1,17 @@
 import httpx
 import os
 from dotenv import load_dotenv
-
+import asyncio
+import nest_asyncio
+nest_asyncio.apply()
 load_dotenv()
 
 BREVO_API_KEY = os.getenv("BREVO_API_KEY")
 BREVO_SENDER_EMAIL = os.getenv("MAIL_FROM", "byazidmohamed21@gmail.com")
 BREVO_SENDER_NAME = os.getenv("MAIL_FROM_NAME", "Heart Alert")
 
-async def send_email(to: str, subject: str, html: str):
-    """Send email using Brevo's HTTP API"""
+async def send_email_async(to: str, subject: str, html: str):
+    """Send email using Brevo's HTTP API (async version)"""
     
     if not BREVO_API_KEY:
         print("❌ BREVO_API_KEY not set in environment variables")
@@ -42,14 +44,22 @@ async def send_email(to: str, subject: str, html: str):
         return response.json()
 
 
-# Sync wrapper for non-async endpoints
-def send_email_sync(to: str, subject: str, html: str):
-    """Sync wrapper for send_email"""
-    import asyncio
+# Sync wrapper that works with existing event loop
+def send_email(to: str, subject: str, html: str):
+    """Sync wrapper for send_email_async"""
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        loop = None
     
-    return loop.run_until_complete(send_email(to, subject, html))
+    if loop and loop.is_running():
+        # We're already in an event loop (FastAPI sync endpoint case)
+        import nest_asyncio
+        nest_asyncio.apply()
+        return asyncio.run_coroutine_threadsafe(
+            send_email_async(to, subject, html), 
+            loop
+        ).result()
+    else:
+        # No event loop running
+        return asyncio.run(send_email_async(to, subject, html))

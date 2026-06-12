@@ -51,3 +51,4 @@ typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.34.2
 gunicorn==23.0.0
+nest_asyncio==1.6.0
