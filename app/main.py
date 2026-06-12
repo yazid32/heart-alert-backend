@@ -1452,27 +1452,36 @@ def get_my_assistant(
     }
 
 # ========== DOCUMENT UPLOAD ==========
-# In the upload-document endpoint
 @app.post("/upload-document")
-async def upload_document(file: UploadFile = File(...)):
-    """Upload medical license or government ID"""
-    
+async def upload_document(
+    file: UploadFile = File(...),
+):
+    """Upload medical license or government ID - stored as base64 in DB (no auth required at signup)"""
+    import base64
+
     allowed_extensions = ['.png', '.jpg', '.jpeg', '.pdf']
     file_ext = os.path.splitext(file.filename)[1].lower()
-    
+
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail="Only PNG, JPG, JPEG, PDF files allowed")
-    
-    import uuid
-    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
-    # Use forward slashes for web compatibility
-    file_path = f"uploads/{unique_filename}"  # Changed from os.path.join
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    # Return path with forward slashes
-    return {"file_path": file_path.replace('\\', '/')}
+
+    # Read and check file size (5MB max)
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be less than 5MB")
+
+    # Encode as base64 data URL so it persists in DB (Render filesystem is ephemeral)
+    mime_map = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.pdf': 'application/pdf'
+    }
+    mime_type = mime_map.get(file_ext, 'application/octet-stream')
+    b64 = base64.b64encode(contents).decode('utf-8')
+    data_url = f"data:{mime_type};base64,{b64}"
+
+    return {"file_path": data_url}
 
 @app.get("/my-status")
 def get_my_status(
