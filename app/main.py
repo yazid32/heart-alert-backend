@@ -15,8 +15,7 @@ from app.auth_config import hash_password, verify_password, create_access_token,
 import re
 from datetime import datetime, timedelta
 import secrets
-import resend
-resend.api_key = os.getenv("re_ALbrQtBX_2DPuEpoJK5ze3bgEhszfD4am")
+from app.email_config import send_email
 from pydantic import BaseModel
 from typing import Optional
 from app.schemas import PatientCreate, PatientUpdate, PatientResponse, PatientListResponse, ProfileResponse
@@ -229,11 +228,10 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         # Send verification email
         try:
             verification_link = f"{BACKEND_URL}/verify-email-redirect?token={verification_token}"
-            resend.Emails.send({
-                "from": "Heart Alert <onboarding@resend.dev>",
-                "to": [new_doctor.email],
-                subject:"Verify Your Heart Alert Email Address",
-                html:f"""
+            send_email(
+                to=new_doctor.email,
+                subject="Verify Your Heart Alert Email Address",
+                html=f"""
                 <html>
                 <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
                     <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
@@ -254,8 +252,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
                 </body>
                 </html>
                 """
-            })
-            await fastmail.send_message(message)
+            )
             print(f"✅ Verification email sent to {new_doctor.email}")
         except Exception as e:
             print(f"❌ Failed to send verification email: {e}")
@@ -363,11 +360,10 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
     print(f"{'='*50}\n")
     
     try:
-        resend.Emails.send({
-            "from": "Heart Alert <onboarding@resend.dev>",
-            "to": [doctor.email],
-            "subject": "Reset Your Heart Alert Password",
-            "html": f"""<html>
+        send_email(
+            to=doctor.email,
+            subject="Reset Your Heart Alert Password",
+            html=f"""<html>
             <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
                 <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
                     <h2 style="color: #222;">Heart Alert</h2>
@@ -386,7 +382,7 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
                 </div>
             </body>
             </html>"""
-        })
+        )
 
         print(f"✅ Email sent successfully to {doctor.email}")
         
@@ -983,8 +979,6 @@ async def approve_request(
     
     import secrets
     from app.auth_config import hash_password
-    from app.email_config import fastmail
-    from fastapi_mail import MessageSchema
     
     # Generate a single password that will be used for both hash and email
     temp_password = secrets.token_urlsafe(12)
@@ -1050,40 +1044,35 @@ async def approve_request(
     
     # Send email to assistant with the password
     try:
-        email_body = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
-            <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
-                <h2 style="color: #7A9E7E;">Heart Alert</h2>
-                <p style="color: #444;">Dear {assistant_name},</p>
-                <p style="color: #444;">Dr. {doctor.first_name} {doctor.last_name} has requested you as their assistant in Heart Alert.</p>
-                <p style="color: #444;">Your account has been created:</p>
-                <div style="background: #f4f4f4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-                    <p style="margin: 4px 0;"><strong>Email:</strong> {assistant_email}</p>
-                    <p style="margin: 4px 0;"><strong>Temporary Password:</strong> {temp_password}</p>
+        send_email(
+            to=assistant_email,
+            subject="Your Heart Alert Assistant Account",
+            html=f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
+                <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
+                    <h2 style="color: #7A9E7E;">Heart Alert</h2>
+                    <p style="color: #444;">Dear {assistant_name},</p>
+                    <p style="color: #444;">Dr. {doctor.first_name} {doctor.last_name} has requested you as their assistant in Heart Alert.</p>
+                    <p style="color: #444;">Your account has been created:</p>
+                    <div style="background: #f4f4f4; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                        <p style="margin: 4px 0;"><strong>Email:</strong> {assistant_email}</p>
+                        <p style="margin: 4px 0;"><strong>Temporary Password:</strong> {temp_password}</p>
+                    </div>
+                    <p style="color: #444;">Please login and change your password immediately.</p>
+                    <div style="text-align: center; margin: 32px 0;">
+                        <a href="heartalert://login"
+                           style="background-color: #7A9E7E; color: white; padding: 12px 24px;
+                                  text-decoration: none; border-radius: 8px;">
+                            Open Heart Alert App
+                        </a>
+                    </div>
+                    <p style="color: #888; font-size: 12px;">This is an automated message, please do not reply.</p>
                 </div>
-                <p style="color: #444;">Please login and change your password immediately.</p>
-                <div style="text-align: center; margin: 32px 0;">
-                    <a href="heartalert://login" 
-                       style="background-color: #7A9E7E; color: white; padding: 12px 24px; 
-                              text-decoration: none; border-radius: 8px;">
-                        Open Heart Alert App
-                    </a>
-                </div>
-                <p style="color: #888; font-size: 12px;">This is an automated message, please do not reply.</p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        message = MessageSchema(
-            subject="Welcome to Heart Alert - Your Assistant Account",
-            recipients=[assistant_email],
-            body=email_body,
-            subtype="html"
+            </body>
+            </html>
+            """
         )
-        
-        await fastmail.send_message(message)
         print(f"📧 Welcome email sent to {assistant_email}")
         
     except Exception as e:
@@ -1619,11 +1608,10 @@ async def send_verification_email(
     verification_link = f"{BACKEND_URL}/verify-email-redirect?token={verification_token}"
     
     try:
-        resend.Emails.send({
-            "from": "Heart Alert <onboarding@resend.dev>",
-            "to": [doctor.email],
-            "subject": "Verify Your Heart Alert Email Address",
-            "html": f"""
+        send_email(
+            to=doctor.email,
+            subject="Verify Your Heart Alert Email Address",
+            html=f"""
             <html>
             <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
                 <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
@@ -1644,7 +1632,7 @@ async def send_verification_email(
             </body>
             </html>
             """
-        })
+        )
         print(f"✅ Verification email sent to {doctor.email}")
         
         return {"message": "Verification email sent", "already_verified": False}
