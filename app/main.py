@@ -1,7 +1,11 @@
+# Load environment variables FIRST before any other imports
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.responses import HTMLResponse
 import shutil
-import os
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -29,18 +33,13 @@ from app.schemas import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
     UpdateProfileRequest,
-    SendVerificationEmailRequest,  # ADD THIS
-    VerifyEmailRequest,            # ADD THIS
-    EmailVerificationResponse,     # ADD THIS
+    SendVerificationEmailRequest,
+    VerifyEmailRequest,
+    EmailVerificationResponse,
 )
 import httpx
-import os
 import dns.resolver
 from email_validator import validate_email, EmailNotValidError
-
-# Load environment variables from .env file FIRST
-from dotenv import load_dotenv
-load_dotenv()  # This loads your .env file
 # Pydantic models for request bodies
 class ChangePasswordRequest(BaseModel):
     current_password: str
