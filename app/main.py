@@ -392,12 +392,24 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
     return {"message": "If email exists, reset link has been sent"}
 
 @app.get("/redirect-reset")
-def redirect_reset(token: str):
+def redirect_reset(token: str, user_agent: str = Header(None)):
     """Page that email button lands on — redirects to the app via deep link"""
+    
+    # Check if it's a mobile device
+    is_mobile = any(device in user_agent.lower() for device in ['android', 'ios', 'iphone', 'ipad'])
+    
+    if is_mobile:
+        # Mobile: Use deep link
+        redirect_url = f"heartalert://reset-password?token={token}"
+    else:
+        # Web: Use web URL
+        redirect_url = f"{os.getenv('FRONTEND_URL', 'https://your-netlify-url.netlify.app')}/reset-password?token={token}"
+    
     return HTMLResponse(content=f"""
+    <!DOCTYPE html>
     <html>
     <head>
-        <meta http-equiv="refresh" content="0;url=heartalert://reset-password?token={token}">
+        <meta http-equiv="refresh" content="0;url={redirect_url}">
         <style>
             body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f4f4f4; }}
             .card {{ background: white; border-radius: 12px; padding: 40px; max-width: 400px; margin: auto; }}
@@ -409,12 +421,12 @@ def redirect_reset(token: str):
     <body>
         <div class="card">
             <h2 style="color:#222;">Heart Alert</h2>
-            <p>Opening the app to reset your password...</p>
-            <p>If the app didn't open automatically:</p>
-            <a href="heartalert://reset-password?token={token}">Tap here to open the app</a>
+            <p>Redirecting to reset your password...</p>
+            <p>If you are not redirected automatically:</p>
+            <a href="{redirect_url}">Click here to reset your password</a>
         </div>
         <script>
-            window.location.href = "heartalert://reset-password?token={token}";
+            window.location.href = "{redirect_url}";
         </script>
     </body>
     </html>
