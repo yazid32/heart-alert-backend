@@ -401,8 +401,8 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
         # Mobile: Use deep link
         redirect_url = f"heartalert://reset-password?token={token}"
     else:
-        # Web: Use web URL
-        redirect_url = f"{os.getenv('FRONTEND_URL', 'https://your-netlify-url.netlify.app')}/reset-password?token={token}"
+        # Web: Use your Netlify URL with hash routing
+        redirect_url = f"https://heart-alert-api.onrender.com/#/reset-password?token={token}"
     
     return HTMLResponse(content=f"""
     <!DOCTYPE html>
@@ -430,6 +430,7 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
     </body>
     </html>
     """)
+
 
 @app.post("/reset-password")
 def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
