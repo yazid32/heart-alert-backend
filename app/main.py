@@ -488,20 +488,6 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                     border-radius: 8px;
                     display: none;
                 }}
-                .success {{
-                    color: #155724;
-                    font-size: 14px;
-                    margin-bottom: 16px;
-                    padding: 12px;
-                    background: #d4edda;
-                    border-radius: 8px;
-                    display: none;
-                    text-align: center;
-                }}
-                .success a {{
-                    color: #155724;
-                    text-decoration: underline;
-                }}
                 .requirements {{
                     font-size: 12px;
                     color: #666;
@@ -539,6 +525,35 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                     display: block;
                     margin-bottom: 16px;
                 }}
+                .success-box {{
+                    background: #d4edda;
+                    padding: 20px;
+                    border-radius: 12px;
+                    text-align: center;
+                }}
+                .success-message {{
+                    color: #155724;
+                    font-size: 14px;
+                    margin-bottom: 20px;
+                    line-height: 1.5;
+                }}
+                .login-button {{
+                    display: block;
+                    width: 100%;
+                    background: #7A9E7E;
+                    color: white;
+                    text-align: center;
+                    padding: 14px;
+                    border-radius: 12px;
+                    text-decoration: none;
+                    font-size: 16px;
+                    font-weight: 600;
+                    box-sizing: border-box;
+                    transition: background 0.3s;
+                }}
+                .login-button:hover {{
+                    background: #6b8a6f;
+                }}
             </style>
         </head>
         <body>
@@ -547,7 +562,6 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                 <p class="subtitle">Create a new password for your account</p>
                 
                 <div id="error" class="error"></div>
-                <div id="success" class="success"></div>
                 
                 <input type="password" id="password" placeholder="New password" onkeyup="validatePassword()">
                 <div class="requirements">
@@ -610,12 +624,9 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                     
                     const btn = document.getElementById('resetBtn');
                     const errorDiv = document.getElementById('error');
-                    const successDiv = document.getElementById('success');
                     const formContainer = document.getElementById('formContainer');
                     
-                    // Hide any previous messages
                     errorDiv.style.display = 'none';
-                    successDiv.style.display = 'none';
                     
                     btn.disabled = true;
                     btn.innerHTML = '<span class="spinner"></span> Resetting password...';
@@ -633,21 +644,15 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                         const data = await response.json();
                         
                         if (response.ok) {{
-                            // Show success message
+                            // Show clean success box with green button
                             formContainer.innerHTML = `
                                 <div class="check-icon">✓</div>
                                 <h2 style="text-align:center; color:#28a745;">Password Reset!</h2>
-                                <p style="text-align:center; color:#666; margin-bottom:24px;">
-                                    Your password has been successfully reset.
-                                </p>
-                                <div style="background:#d4edda; padding:16px; border-radius:12px; text-align:center;">
-                                    <p style="margin:0 0 12px 0; color:#155724;">
-                                        You can now close this tab and log in to the Heart Alert app with your new password.
-                                    </p>
-                                    <a href="https://heartalert.netlify.app/#/login">
-                                       style="display:inline-block; background:#7A9E7E; color:white; 
-                                              padding:12px 24px; text-decoration:none; border-radius:8px;
-                                              margin-top:8px;">
+                                <div class="success-box">
+                                    <div class="success-message">
+                                        Your password has been successfully reset.
+                                    </div>
+                                    <a href="https://heartalert.netlify.app/#/login" class="login-button">
                                         Go to Login
                                     </a>
                                 </div>
@@ -671,8 +676,6 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
         """
     
     return HTMLResponse(content=html_content)
-
-
 @app.post("/reset-password")
 def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
     doctor = db.query(models.Doctor).filter(
