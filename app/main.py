@@ -9,7 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from app.routers import auth
 from app.ml.model import predict_heart_disease
 from app.database import get_db
@@ -2321,6 +2321,79 @@ class ContactSupportRequest(BaseModel):
     email: str
     subject: str
     message: str
+
+
+# ========== ADMIN STATS ==========
+@app.get("/admin/stats")
+def get_admin_stats(
+    current_user: models.Doctor = Depends(require_role(['admin'])),
+    db: Session = Depends(get_db)
+):
+    """Get system statistics for admin dashboard"""
+    
+    # User counts
+    total_doctors = db.query(models.Doctor).filter(
+        models.Doctor.role == 'doctor',
+        models.Doctor.status == 'approved'
+    ).count()
+    
+    total_assistants = db.query(models.Doctor).filter(
+        models.Doctor.role == 'assistant',
+        models.Doctor.status == 'approved'
+    ).count()
+    
+    pending_doctors = db.query(models.Doctor).filter(
+        models.Doctor.role == 'pending',
+        models.Doctor.status == 'pending'
+    ).count()
+    
+    total_users = db.query(models.Doctor).count()
+    
+    # Prediction counts
+    total_predictions = db.query(models.Prediction).count()
+    
+    # Today's predictions
+    today = datetime.utcnow().date()
+    today_predictions = db.query(models.Prediction).filter(
+        func.date(models.Prediction.created_at) == today
+    ).count()
+    
+    # This week's predictions
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_predictions = db.query(models.Prediction).filter(
+        models.Prediction.created_at >= week_ago
+    ).count()
+    
+    # Email verification rate
+    verified_users = db.query(models.Doctor).filter(
+        models.Doctor.email_verified == True
+    ).count()
+    verification_rate = (verified_users / total_users * 100) if total_users > 0 else 0
+    
+    # Pending assistant requests
+    pending_requests = db.query(models.AssistantRequest).filter(
+        models.AssistantRequest.status == 'pending'
+    ).count()
+    
+    # Open support tickets
+    open_tickets = db.query(models.SupportTicket).filter(
+        models.SupportTicket.status == 'open'
+    ).count()
+    
+    return {
+        "doctors": total_doctors,
+        "assistants": total_assistants,
+        "pending_approvals": pending_doctors,
+        "total_users": total_users,
+        "verified_users": verified_users,
+        "verification_rate": round(verification_rate, 1),
+        "total_predictions": total_predictions,
+        "today_predictions": today_predictions,
+        "week_predictions": week_predictions,
+        "pending_requests": pending_requests,
+        "open_tickets": open_tickets,
+    }
+
 
 @app.post("/contact-support")
 async def contact_support(
