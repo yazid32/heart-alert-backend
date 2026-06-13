@@ -644,7 +644,7 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                                     <p style="margin:0 0 12px 0; color:#155724;">
                                         You can now close this tab and log in to the Heart Alert app with your new password.
                                     </p>
-                                    <a href="https://heartalert.netlify.app/login" 
+                                    <a href="https://heartalert.netlify.app/#/login">
                                        style="display:inline-block; background:#7A9E7E; color:white; 
                                               padding:12px 24px; text-decoration:none; border-radius:8px;
                                               margin-top:8px;">
