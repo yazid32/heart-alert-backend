@@ -389,7 +389,6 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
         print(f"Error details: {str(e)}")
     
     return {"message": "If email exists, reset link has been sent"}
-
 @app.get("/redirect-reset")
 def redirect_reset(token: str, user_agent: str = Header(None)):
     """Page that email button lands on — redirects to the app via deep link"""
@@ -400,37 +399,44 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
     if is_mobile:
         # Mobile: Use deep link
         redirect_url = f"heartalert://reset-password?token={token}"
+        html_content = f"""
+        <html>
+        <head>
+            <meta http-equiv="refresh" content="0;url={redirect_url}">
+        </head>
+        <body>
+            <p>Opening app...</p>
+            <a href="{redirect_url}">Click here if app doesn't open</a>
+        </body>
+        </html>
+        """
     else:
-        # Web: Use your Netlify URL with hash routing
-        redirect_url = f"https://heart-alert-api.onrender.com/#/reset-password?token={token}"
-    
-    return HTMLResponse(content=f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta http-equiv="refresh" content="0;url={redirect_url}">
-        <style>
-            body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f4f4f4; }}
-            .card {{ background: white; border-radius: 12px; padding: 40px; max-width: 400px; margin: auto; }}
-            a {{ color: white; background: #4CAF50; padding: 12px 28px; border-radius: 8px;
-                 text-decoration: none; font-size: 16px; font-weight: bold; display: inline-block; margin-top: 16px; }}
-            p {{ color: #444; }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h2 style="color:#222;">Heart Alert</h2>
+        # Web: Direct to your Netlify URL with the token
+        # REPLACE THIS WITH YOUR ACTUAL NETLIFY URL
+        netlify_url = "https://heart-alert.netlify.app"  # ← CHANGE THIS TO YOUR NETLIFY URL
+        
+        # The Flutter web app will read the token from URL parameter
+        redirect_url = f"{netlify_url}/#/reset-password?token={token}"
+        
+        # Use JavaScript to redirect with proper hash routing
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Redirecting...</title>
+            <script>
+                // Redirect to the Flutter web app with the token
+                window.location.href = "{redirect_url}";
+            </script>
+        </head>
+        <body>
             <p>Redirecting to reset your password...</p>
-            <p>If you are not redirected automatically:</p>
-            <a href="{redirect_url}">Click here to reset your password</a>
-        </div>
-        <script>
-            window.location.href = "{redirect_url}";
-        </script>
-    </body>
-    </html>
-    """)
-
+            <p>If you are not redirected, <a href="{redirect_url}">click here</a></p>
+        </body>
+        </html>
+        """
+    
+    return HTMLResponse(content=html_content)
 
 @app.post("/reset-password")
 def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
