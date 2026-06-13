@@ -411,32 +411,176 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
         </html>
         """
     else:
-        # Web: Direct to your Netlify URL with the token
-        # REPLACE THIS WITH YOUR ACTUAL NETLIFY URL
-        netlify_url = "https://heart-alert.netlify.app"  # ← CHANGE THIS TO YOUR NETLIFY URL
-        
-        # The Flutter web app will read the token from URL parameter
-        redirect_url = f"{netlify_url}/#/reset-password?token={token}"
-        
-        # Use JavaScript to redirect with proper hash routing
+        # Web: Show the reset password form directly in this page
         html_content = f"""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Redirecting...</title>
-            <script>
-                // Redirect to the Flutter web app with the token
-                window.location.href = "{redirect_url}";
-            </script>
+            <title>Reset Password - Heart Alert</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: #f5f5f0;
+                    margin: 0;
+                    padding: 20px;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                }}
+                .container {{
+                    background: white;
+                    border-radius: 24px;
+                    padding: 32px;
+                    max-width: 400px;
+                    width: 100%;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                }}
+                h2 {{
+                    color: #222;
+                    margin-bottom: 8px;
+                }}
+                .subtitle {{
+                    color: #666;
+                    margin-bottom: 24px;
+                }}
+                input {{
+                    width: 100%;
+                    padding: 14px 16px;
+                    border: 1px solid #ddd;
+                    border-radius: 12px;
+                    font-size: 16px;
+                    margin-bottom: 16px;
+                    box-sizing: border-box;
+                }}
+                input:focus {{
+                    outline: none;
+                    border-color: #7A9E7E;
+                }}
+                button {{
+                    width: 100%;
+                    padding: 14px;
+                    background: #7A9E7E;
+                    color: white;
+                    border: none;
+                    border-radius: 12px;
+                    font-size: 16px;
+                    font-weight: 600;
+                    cursor: pointer;
+                }}
+                button:hover {{
+                    background: #6b8a6f;
+                }}
+                .error {{
+                    color: red;
+                    font-size: 14px;
+                    margin-bottom: 16px;
+                }}
+                .success {{
+                    color: green;
+                    font-size: 14px;
+                    margin-bottom: 16px;
+                }}
+                .spinner {{
+                    display: inline-block;
+                    width: 20px;
+                    height: 20px;
+                    border: 2px solid white;
+                    border-top-color: transparent;
+                    border-radius: 50%;
+                    animation: spin 0.8s linear infinite;
+                }}
+                @keyframes spin {{
+                    to {{ transform: rotate(360deg); }}
+                }}
+            </style>
         </head>
         <body>
-            <p>Redirecting to reset your password...</p>
-            <p>If you are not redirected, <a href="{redirect_url}">click here</a></p>
+            <div class="container">
+                <h2>Reset Password</h2>
+                <p class="subtitle">Enter your new password below</p>
+                
+                <div id="error" class="error" style="display:none"></div>
+                <div id="success" class="success" style="display:none"></div>
+                
+                <input type="password" id="password" placeholder="New password (min 8 characters)">
+                <input type="password" id="confirm_password" placeholder="Confirm new password">
+                
+                <button id="resetBtn">Reset Password</button>
+            </div>
+
+            <script>
+                const token = '{token}';
+                
+                document.getElementById('resetBtn').addEventListener('click', async function() {{
+                    const password = document.getElementById('password').value;
+                    const confirm = document.getElementById('confirm_password').value;
+                    
+                    if (password.length < 8) {{
+                        showError('Password must be at least 8 characters');
+                        return;
+                    }}
+                    
+                    if (password !== confirm) {{
+                        showError('Passwords do not match');
+                        return;
+                    }}
+                    
+                    const btn = document.getElementById('resetBtn');
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="spinner"></span> Resetting...';
+                    
+                    try {{
+                        const response = await fetch('/reset-password', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{
+                                token: token,
+                                new_password: password
+                            }})
+                        }});
+                        
+                        const data = await response.json();
+                        
+                        if (response.ok) {{
+                            showSuccess('Password reset successfully! Redirecting to login...');
+                            setTimeout(() => {{
+                                window.location.href = 'https://heartalert.netlify.app/login';
+                            }}, 2000);
+                        }} else {{
+                            showError(data.detail || 'Failed to reset password');
+                            btn.disabled = false;
+                            btn.innerHTML = 'Reset Password';
+                        }}
+                    }} catch (err) {{
+                        showError('Network error. Please try again.');
+                        btn.disabled = false;
+                        btn.innerHTML = 'Reset Password';
+                    }}
+                }});
+                
+                function showError(msg) {{
+                    const errorDiv = document.getElementById('error');
+                    errorDiv.textContent = msg;
+                    errorDiv.style.display = 'block';
+                    setTimeout(() => {{
+                        errorDiv.style.display = 'none';
+                    }}, 5000);
+                }}
+                
+                function showSuccess(msg) {{
+                    const successDiv = document.getElementById('success');
+                    successDiv.textContent = msg;
+                    successDiv.style.display = 'block';
+                }}
+            </script>
         </body>
         </html>
         """
     
     return HTMLResponse(content=html_content)
+
 
 @app.post("/reset-password")
 def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
