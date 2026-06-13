@@ -2109,3 +2109,282 @@ def cancel_assistant_request(
     db.commit()
     
     return {"message": "Request cancelled successfully"}
+
+
+# ========== SUPPORT TICKETS (Simplest Standard) ==========
+
+class SupportTicketCreate(BaseModel):
+    name: str
+    email: str
+    subject: str
+    message: str
+
+@app.post("/support/create")
+async def create_support_ticket(
+    ticket: SupportTicketCreate,
+    db: Session = Depends(get_db)
+):
+    """Create a support ticket (works with or without login)"""
+    
+    # Try to get user info if logged in (check Authorization header)
+    user_id = None
+    try:
+        auth_header = HTTPBearer()(None)
+        token = auth_header.credentials
+        if token:
+            payload = decode_access_token(token)
+            user_id = payload.get("sub")
+    except:
+        pass
+    
+    new_ticket = models.SupportTicket(
+        user_id=user_id,
+        user_name=ticket.name,
+        user_email=ticket.email,
+        subject=ticket.subject,
+        message=ticket.message,
+        status="open"
+    )
+    
+    db.add(new_ticket)
+    db.commit()
+    db.refresh(new_ticket)
+    
+    # Get admin emails
+    admins = db.query(models.Doctor).filter(models.Doctor.role == 'admin').all()
+    admin_emails = [admin.email for admin in admins] if admins else ["byazidmohamed21@gmail.com"]
+    
+    # Send email notification to admins
+    for admin_email in admin_emails:
+        send_email(
+            to=admin_email,
+            subject=f"New Support Ticket #{new_ticket.id}: {ticket.subject}",
+            html=f"""
+            <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h3>New Support Ticket #{new_ticket.id}</h3>
+                <p><strong>From:</strong> {ticket.name} ({ticket.email})</p>
+                <p><strong>Subject:</strong> {ticket.subject}</p>
+                <p><strong>Message:</strong></p>
+                <p>{ticket.message}</p>
+                <p><a href="{BACKEND_URL}/admin/tickets">View in Admin Dashboard</a></p>
+            </body>
+            </html>
+            """
+        )
+    
+    # Send confirmation to user
+    send_email(
+        to=ticket.email,
+        subject="Heart Alert - We received your message",
+        html=f"""
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h3>Thank you for contacting us</h3>
+            <p>Dear {ticket.name},</p>
+            <p>We have received your message and will respond within 24-48 hours.</p>
+            <p><strong>Your message:</strong> {ticket.message}</p>
+            <p>Best regards,<br>Heart Alert Team</p>
+        </body>
+        </html>
+        """
+    )
+    
+    return {"message": "Ticket created", "ticket_id": new_ticket.id}
+
+
+@app.get("/admin/tickets")
+def get_all_tickets(
+    current_user: models.Doctor = Depends(require_role(['admin'])),
+    db: Session = Depends(get_db)
+):
+    """Admin: Get all support tickets"""
+    tickets = db.query(models.SupportTicket).order_by(
+        desc(models.SupportTicket.created_at)
+    ).all()
+    
+    return tickets
+
+
+@app.post("/admin/tickets/{ticket_id}/reply")
+def reply_to_ticket(
+    ticket_id: int,
+    request: dict,
+    current_user: models.Doctor = Depends(require_role(['admin'])),
+    db: Session = Depends(get_db)
+):
+    """Admin: Reply to a ticket"""
+    
+    ticket = db.query(models.SupportTicket).filter(
+        models.SupportTicket.id == ticket_id
+    ).first()
+    
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    reply_message = request.get("message")
+    new_status = request.get("status", "resolved")
+    
+    ticket.admin_reply = reply_message
+    ticket.status = new_status
+    ticket.updated_at = datetime.utcnow()
+    db.commit()
+    
+    # Send email to user with admin's reply
+    send_email(
+        to=ticket.user_email,
+        subject=f"Re: {ticket.subject} (Heart Alert Support)",
+        html=f"""
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h3>Reply to your support ticket #{ticket.id}</h3>
+            <p><strong>Your message:</strong> {ticket.message}</p>
+            <p><strong>Admin response:</strong></p>
+            <p>{reply_message}</p>
+            <p><strong>Status:</strong> {new_status}</p>
+            <p>If you have further questions, please reply to this email.</p>
+            <p>Best regards,<br>Heart Alert Support Team</p>
+        </body>
+        </html>
+        """
+    )
+    
+    return {"message": "Reply sent"}
+
+
+@app.put("/admin/tickets/{ticket_id}/status")
+def update_ticket_status(
+    ticket_id: int,
+    request: dict,
+    current_user: models.Doctor = Depends(require_role(['admin'])),
+    db: Session = Depends(get_db)
+):
+    """Admin: Update ticket status only"""
+    
+    ticket = db.query(models.SupportTicket).filter(
+        models.SupportTicket.id == ticket_id
+    ).first()
+    
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    ticket.status = request.get("status", ticket.status)
+    ticket.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"message": "Status updated"}
+
+
+@app.get("/my-tickets")
+def get_my_tickets(
+    current_user: models.Doctor = Depends(require_role(['doctor', 'assistant', 'admin'])),
+    db: Session = Depends(get_db)
+):
+    """User: Get their own tickets"""
+    tickets = db.query(models.SupportTicket).filter(
+        models.SupportTicket.user_id == current_user.id
+    ).order_by(desc(models.SupportTicket.created_at)).all()
+    
+    return tickets
+
+
+# ========== DOCTOR REMOVE ASSISTANT ==========
+@app.delete("/doctor/remove-assistant")
+def doctor_remove_assistant(
+    current_doctor: models.Doctor = Depends(require_role(['doctor'])),
+    current_user: models.Doctor = Depends(require_status(['approved'])),
+    db: Session = Depends(get_db)
+):
+    """Doctor removes their own assistant - no admin approval needed"""
+    
+    # Find assistant assigned to this doctor
+    assistant = db.query(models.Doctor).filter(
+        models.Doctor.assigned_to == current_doctor.id,
+        models.Doctor.role == 'assistant'
+    ).first()
+    
+    if not assistant:
+        raise HTTPException(status_code=404, detail="No assistant found for this doctor")
+    
+    # Remove the assistant's assignment
+    assistant.assigned_to = None
+    assistant.role = 'pending'
+    assistant.status = 'pending'
+    
+    db.commit()
+    
+    return {"message": "Assistant removed successfully"}
+
+# ========== CONTACT SUPPORT ==========
+class ContactSupportRequest(BaseModel):
+    name: str
+    email: str
+    subject: str
+    message: str
+
+@app.post("/contact-support")
+async def contact_support(
+    request: ContactSupportRequest,
+    db: Session = Depends(get_db)
+):
+    """Send a message to admin (no login required)"""
+    
+    # Get admin emails
+    admins = db.query(models.Doctor).filter(
+        models.Doctor.role == 'admin'
+    ).all()
+    
+    admin_emails = [admin.email for admin in admins]
+    
+    if not admin_emails:
+        raise HTTPException(status_code=500, detail="No admin found")
+    
+    # Send email to all admins
+    email_body = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
+        <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
+            <h2 style="color: #7A9E7E;">Heart Alert - Support Request</h2>
+            <p style="color: #444;"><strong>From:</strong> {request.name} ({request.email})</p>
+            <p style="color: #444;"><strong>Subject:</strong> {request.subject}</p>
+            <hr>
+            <p style="color: #444;"><strong>Message:</strong></p>
+            <p style="color: #444; background: #f9f9f9; padding: 16px; border-radius: 8px;">
+                {request.message}
+            </p>
+            <p style="color: #888; font-size: 12px;">Reply to: {request.email}</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    for admin_email in admin_emails:
+        send_email(
+            to=admin_email,
+            subject=f"Support Request: {request.subject}",
+            html=email_body
+        )
+    
+    # Also send confirmation to user
+    send_email(
+        to=request.email,
+        subject="Heart Alert - We received your message",
+        html=f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
+            <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
+                <h2 style="color: #7A9E7E;">Thank you for contacting us</h2>
+                <p style="color: #444;">Dear {request.name},</p>
+                <p style="color: #444;">We have received your message and will respond within 24-48 hours.</p>
+                <p style="color: #444;"><strong>Your message:</strong></p>
+                <p style="color: #444; background: #f9f9f9; padding: 16px; border-radius: 8px;">
+                    {request.message}
+                </p>
+                <p style="color: #888; font-size: 12px;">Best regards,<br>Heart Alert Team</p>
+            </div>
+        </body>
+        </html>
+        """
+    )
+    
+    return {"message": "Message sent successfully"}
