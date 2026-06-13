@@ -389,6 +389,8 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
         print(f"Error details: {str(e)}")
     
     return {"message": "If email exists, reset link has been sent"}
+
+
 @app.get("/redirect-reset")
 def redirect_reset(token: str, user_agent: str = Header(None)):
     """Page that email button lands on — redirects to the app via deep link"""
@@ -468,68 +470,155 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                     font-size: 16px;
                     font-weight: 600;
                     cursor: pointer;
+                    transition: background 0.3s;
                 }}
                 button:hover {{
                     background: #6b8a6f;
                 }}
+                button:disabled {{
+                    background: #ccc;
+                    cursor: not-allowed;
+                }}
                 .error {{
-                    color: red;
-                    font-size: 14px;
+                    color: #dc3545;
+                    font-size: 13px;
                     margin-bottom: 16px;
+                    padding: 10px;
+                    background: #f8d7da;
+                    border-radius: 8px;
+                    display: none;
                 }}
                 .success {{
-                    color: green;
+                    color: #155724;
                     font-size: 14px;
                     margin-bottom: 16px;
+                    padding: 12px;
+                    background: #d4edda;
+                    border-radius: 8px;
+                    display: none;
+                    text-align: center;
+                }}
+                .success a {{
+                    color: #155724;
+                    text-decoration: underline;
+                }}
+                .requirements {{
+                    font-size: 12px;
+                    color: #666;
+                    margin-top: -12px;
+                    margin-bottom: 16px;
+                    padding-left: 4px;
+                }}
+                .requirements span {{
+                    display: inline-block;
+                    margin-right: 12px;
+                }}
+                .valid {{
+                    color: #28a745;
+                }}
+                .invalid {{
+                    color: #dc3545;
                 }}
                 .spinner {{
                     display: inline-block;
-                    width: 20px;
-                    height: 20px;
+                    width: 18px;
+                    height: 18px;
                     border: 2px solid white;
                     border-top-color: transparent;
                     border-radius: 50%;
                     animation: spin 0.8s linear infinite;
+                    vertical-align: middle;
+                    margin-right: 8px;
                 }}
                 @keyframes spin {{
                     to {{ transform: rotate(360deg); }}
                 }}
+                .check-icon {{
+                    font-size: 48px;
+                    text-align: center;
+                    display: block;
+                    margin-bottom: 16px;
+                }}
             </style>
         </head>
         <body>
-            <div class="container">
+            <div class="container" id="formContainer">
                 <h2>Reset Password</h2>
-                <p class="subtitle">Enter your new password below</p>
+                <p class="subtitle">Create a new password for your account</p>
                 
-                <div id="error" class="error" style="display:none"></div>
-                <div id="success" class="success" style="display:none"></div>
+                <div id="error" class="error"></div>
+                <div id="success" class="success"></div>
                 
-                <input type="password" id="password" placeholder="New password (min 8 characters)">
-                <input type="password" id="confirm_password" placeholder="Confirm new password">
+                <input type="password" id="password" placeholder="New password" onkeyup="validatePassword()">
+                <div class="requirements">
+                    <span id="lengthReq" class="invalid">✗ 8+ characters</span>
+                    <span id="upperReq" class="invalid">✗ Uppercase letter</span>
+                    <span id="specialReq" class="invalid">✗ Special character</span>
+                </div>
                 
-                <button id="resetBtn">Reset Password</button>
+                <input type="password" id="confirm_password" placeholder="Confirm new password" onkeyup="validateMatch()">
+                
+                <button id="resetBtn" onclick="resetPassword()">Reset Password</button>
             </div>
 
             <script>
-                const token = '{token}';
+                let isPasswordValid = false;
+                let doPasswordsMatch = false;
                 
-                document.getElementById('resetBtn').addEventListener('click', async function() {{
+                function validatePassword() {{
+                    const password = document.getElementById('password').value;
+                    
+                    const hasLength = password.length >= 8;
+                    const hasUpper = /[A-Z]/.test(password);
+                    const hasSpecial = /[!@#$%^&*(),.?":{{}}|<>]/.test(password);
+                    
+                    updateRequirement('lengthReq', hasLength);
+                    updateRequirement('upperReq', hasUpper);
+                    updateRequirement('specialReq', hasSpecial);
+                    
+                    isPasswordValid = hasLength && hasUpper && hasSpecial;
+                    validateMatch();
+                    updateButtonState();
+                }}
+                
+                function updateRequirement(elementId, isValid) {{
+                    const element = document.getElementById(elementId);
+                    if (isValid) {{
+                        element.innerHTML = '✓ ' + element.innerHTML.substring(2);
+                        element.className = 'valid';
+                    }} else {{
+                        element.innerHTML = '✗ ' + element.innerHTML.substring(2);
+                        element.className = 'invalid';
+                    }}
+                }}
+                
+                function validateMatch() {{
                     const password = document.getElementById('password').value;
                     const confirm = document.getElementById('confirm_password').value;
-                    
-                    if (password.length < 8) {{
-                        showError('Password must be at least 8 characters');
-                        return;
-                    }}
-                    
-                    if (password !== confirm) {{
-                        showError('Passwords do not match');
-                        return;
-                    }}
+                    doPasswordsMatch = password === confirm && password.length > 0;
+                    updateButtonState();
+                }}
+                
+                function updateButtonState() {{
+                    const btn = document.getElementById('resetBtn');
+                    btn.disabled = !(isPasswordValid && doPasswordsMatch);
+                }}
+                
+                async function resetPassword() {{
+                    const password = document.getElementById('password').value;
+                    const token = '{token}';
                     
                     const btn = document.getElementById('resetBtn');
+                    const errorDiv = document.getElementById('error');
+                    const successDiv = document.getElementById('success');
+                    const formContainer = document.getElementById('formContainer');
+                    
+                    // Hide any previous messages
+                    errorDiv.style.display = 'none';
+                    successDiv.style.display = 'none';
+                    
                     btn.disabled = true;
-                    btn.innerHTML = '<span class="spinner"></span> Resetting...';
+                    btn.innerHTML = '<span class="spinner"></span> Resetting password...';
                     
                     try {{
                         const response = await fetch('/reset-password', {{
@@ -544,35 +633,37 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
                         const data = await response.json();
                         
                         if (response.ok) {{
-                            showSuccess('Password reset successfully! Redirecting to login...');
-                            setTimeout(() => {{
-                                window.location.href = 'https://heartalert.netlify.app/login';
-                            }}, 2000);
+                            // Show success message
+                            formContainer.innerHTML = `
+                                <div class="check-icon">✓</div>
+                                <h2 style="text-align:center; color:#28a745;">Password Reset!</h2>
+                                <p style="text-align:center; color:#666; margin-bottom:24px;">
+                                    Your password has been successfully reset.
+                                </p>
+                                <div style="background:#d4edda; padding:16px; border-radius:12px; text-align:center;">
+                                    <p style="margin:0 0 12px 0; color:#155724;">
+                                        You can now close this tab and log in to the Heart Alert app with your new password.
+                                    </p>
+                                    <a href="https://heartalert.netlify.app/login" 
+                                       style="display:inline-block; background:#7A9E7E; color:white; 
+                                              padding:12px 24px; text-decoration:none; border-radius:8px;
+                                              margin-top:8px;">
+                                        Go to Login
+                                    </a>
+                                </div>
+                            `;
                         }} else {{
-                            showError(data.detail || 'Failed to reset password');
+                            errorDiv.textContent = data.detail || 'Failed to reset password. The link may have expired.';
+                            errorDiv.style.display = 'block';
                             btn.disabled = false;
                             btn.innerHTML = 'Reset Password';
                         }}
                     }} catch (err) {{
-                        showError('Network error. Please try again.');
+                        errorDiv.textContent = 'Network error. Please check your connection and try again.';
+                        errorDiv.style.display = 'block';
                         btn.disabled = false;
                         btn.innerHTML = 'Reset Password';
                     }}
-                }});
-                
-                function showError(msg) {{
-                    const errorDiv = document.getElementById('error');
-                    errorDiv.textContent = msg;
-                    errorDiv.style.display = 'block';
-                    setTimeout(() => {{
-                        errorDiv.style.display = 'none';
-                    }}, 5000);
-                }}
-                
-                function showSuccess(msg) {{
-                    const successDiv = document.getElementById('success');
-                    successDiv.textContent = msg;
-                    successDiv.style.display = 'block';
                 }}
             </script>
         </body>
