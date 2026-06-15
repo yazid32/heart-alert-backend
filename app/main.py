@@ -169,12 +169,15 @@ async def verify_phone(request: PhoneVerificationRequest):
             "phone_number": phone_number,
             "message": f"Could not verify: {str(e)}"
         }
+    
+
 @app.post("/signup", response_model=TokenResponse)
 async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     """Register a new doctor - requires email verification"""
     
     print(f"1. Received signup for: {doctor_data.email}")
     print(f"2. Selected role: {doctor_data.role}")
+    print(f"3. Invite token: {doctor_data.invite_token}")  # ADD THIS
     
     try:
         # Check if email already exists
@@ -185,6 +188,25 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         # Both doctors and assistants start as 'pending' (needs admin approval)
         user_role = 'pending'
         user_status = 'pending'
+        
+        # Check if this is a hospital invite
+        subscription_plan = 'freemium'  # default
+        is_hospital_invite = False
+        hospital_admin_id = None
+        
+        if doctor_data.invite_token:
+            # Find the invitation
+            invitation = db.query(models.HospitalInvitation).filter(
+                models.HospitalInvitation.token == doctor_data.invite_token,
+                models.HospitalInvitation.expires_at > datetime.utcnow(),
+                models.HospitalInvitation.status == 'pending'
+            ).first()
+            
+            if invitation:
+                is_hospital_invite = True
+                hospital_admin_id = invitation.hospital_admin_id
+                subscription_plan = 'hospital_pro'  # Hospital pays, doctor gets Pro
+                print(f"✅ Hospital invite accepted from admin ID: {hospital_admin_id}")
         
         # Generate email verification token
         verification_token = secrets.token_urlsafe(32)
@@ -209,19 +231,42 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             role=user_role,
             status=user_status,
             assigned_to=None,
-            email_verified=False,  # NEW: Not verified yet
-            email_verification_token=verification_token,  # NEW
-            email_verification_sent_at=datetime.utcnow(),  # NEW
+            email_verified=False,
+            email_verification_token=verification_token,
+            email_verification_sent_at=datetime.utcnow(),
+            # ========== SUBSCRIPTION FIELDS ==========
+            subscription_plan=subscription_plan,  # ADD THIS
+            subscription_status='active',  # ADD THIS
+            monthly_predictions_count=0,  # ADD THIS
+            last_prediction_reset=datetime.utcnow().date(),  # ADD THIS
         )
         
         db.add(new_doctor)
         db.commit()
         db.refresh(new_doctor)
         
+        # ========== HANDLE HOSPITAL INVITATION ==========
+        if is_hospital_invite and hospital_admin_id:
+            # Link doctor to hospital
+            hospital_doctor = models.HospitalDoctor(
+                hospital_admin_id=hospital_admin_id,
+                doctor_id=new_doctor.id,
+                status='active',
+                accepted_at=datetime.utcnow()
+            )
+            db.add(hospital_doctor)
+            
+            # Mark invitation as used
+            invitation.status = 'used'
+            db.commit()
+            
+            print(f"✅ Doctor {new_doctor.email} linked to hospital admin {hospital_admin_id}")
+        
         # Create JWT token (they can login but with restricted access until approved AND verified)
         access_token = create_access_token(data={"sub": str(new_doctor.id)})
         
         print(f"User created with ID: {new_doctor.id}, waiting for admin approval and email verification")
+        print(f"Subscription plan: {subscription_plan}")
         
         # Send verification email
         try:
@@ -268,7 +313,8 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             "profile_picture": new_doctor.profile_picture,
             "role": new_doctor.role,
             "status": new_doctor.status,
-            "email_verified": False  # NEW: Tell frontend to show verification dialog
+            "email_verified": False,
+            "subscription_plan": subscription_plan  # ADD THIS to response
         }
         
     except Exception as e:
@@ -277,7 +323,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 
 @app.post("/login")
 def login(
@@ -850,7 +896,7 @@ def predict(
     db: Session = Depends(get_db)
 ):
     print(f"📝 Received patient_name: {data.patient_name}")
-    
+    check_prediction_limit(current_doctor, db)
     # For assistants, store under assigned doctor
     doctor_id = current_doctor.id
     if current_doctor.role == 'assistant' and current_doctor.assigned_to:
@@ -894,7 +940,7 @@ def predict(
     db.add(prediction)
     db.commit()
     db.refresh(prediction)
-    
+    increment_prediction_count(current_doctor, db)
     return {
         "prediction_id": prediction.id,
         "risk_score": result["risk_score"],
@@ -2461,3 +2507,430 @@ async def contact_support(
     )
     
     return {"message": "Message sent successfully"}
+
+# ========== SUBSCRIPTION SYSTEM ==========
+import stripe
+import secrets
+from datetime import date, timedelta
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+
+# Helper function to check subscription limits
+def check_prediction_limit(doctor: models.Doctor, db: Session):
+    """Check if user can make a prediction based on their plan"""
+    
+    # Reset monthly counter if needed
+    today = date.today()
+    if doctor.last_prediction_reset != today:
+        doctor.monthly_predictions_count = 0
+        doctor.last_prediction_reset = today
+        db.commit()
+    
+    # Get plan details
+    plan = db.query(models.PricingPlan).filter(
+        models.PricingPlan.name == doctor.subscription_plan
+    ).first()
+    
+    if plan and plan.prediction_limit:
+        if doctor.monthly_predictions_count >= plan.prediction_limit:
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Monthly prediction limit reached ({plan.prediction_limit}). Please upgrade to continue."
+            )
+    
+    return True
+
+
+def increment_prediction_count(doctor: models.Doctor, db: Session):
+    """Increment prediction count after successful prediction"""
+    doctor.monthly_predictions_count += 1
+    db.commit()
+
+
+# ========== PRICING PLANS ==========
+@app.get("/pricing-plans")
+def get_pricing_plans(db: Session = Depends(get_db)):
+    """Get all pricing plans"""
+    plans = db.query(models.PricingPlan).filter(
+        models.PricingPlan.is_active == True
+    ).order_by(models.PricingPlan.sort_order).all()
+    
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "display_name": p.display_name,
+            "description": p.description,
+            "price_cents": p.price_cents,
+            "price_dollars": p.price_cents / 100,
+            "interval_type": p.interval_type,
+            "features": p.features,
+            "doctor_limit": p.doctor_limit,
+            "assistant_limit": p.assistant_limit,
+            "prediction_limit": p.prediction_limit
+        }
+        for p in plans
+    ]
+
+
+# ========== CREATE CHECKOUT SESSION ==========
+class CheckoutRequest(BaseModel):
+    plan_name: str  # 'pro' or 'hospital'
+    success_url: str
+    cancel_url: str
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(
+    request: CheckoutRequest,
+    current_user: models.Doctor = Depends(require_role(['doctor', 'hospital_admin'])),
+    db: Session = Depends(get_db)
+):
+    """Create Stripe Checkout session for subscription"""
+    
+    # Get the plan
+    plan = db.query(models.PricingPlan).filter(
+        models.PricingPlan.name == request.plan_name
+    ).first()
+    
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    try:
+        # Create or get Stripe customer
+        customer_id = current_user.stripe_customer_id
+        if not customer_id:
+            customer = stripe.Customer.create(
+                email=current_user.email,
+                name=f"{current_user.first_name} {current_user.last_name}",
+                metadata={"user_id": current_user.id}
+            )
+            customer_id = customer.id
+            current_user.stripe_customer_id = customer_id
+            db.commit()
+        
+        # Create or get Stripe price ID
+        if not plan.stripe_price_id:
+            price = stripe.Price.create(
+                unit_amount=plan.price_cents,
+                currency=plan.currency,
+                recurring={"interval": plan.interval_type},
+                product_data={"name": plan.display_name},
+            )
+            plan.stripe_price_id = price.id
+            db.commit()
+        
+        # Create checkout session
+        checkout_session = stripe.checkout.Session.create(
+            customer=customer_id,
+            payment_method_types=["card"],
+            line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
+            mode="subscription" if plan.interval_type != "one_time" else "payment",
+            success_url=request.success_url,
+            cancel_url=request.cancel_url,
+            metadata={
+                "user_id": current_user.id,
+                "plan_name": plan.name
+            }
+        )
+        
+        return {"session_url": checkout_session.url}
+        
+    except Exception as e:
+        print(f"Stripe error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ========== WEBHOOK ==========
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle Stripe webhook events"""
+    
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook")
+    
+    # Handle checkout completed
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        user_id = int(session["metadata"]["user_id"])
+        plan_name = session["metadata"]["plan_name"]
+        
+        user = db.query(models.Doctor).filter(models.Doctor.id == user_id).first()
+        if user:
+            # Update user's subscription
+            user.subscription_plan = plan_name
+            user.subscription_status = "active"
+            
+            # Get subscription details from Stripe
+            if session.get("subscription"):
+                stripe_sub = stripe.Subscription.retrieve(session["subscription"])
+                user.subscription_expires_at = datetime.fromtimestamp(stripe_sub.current_period_end)
+                
+                # Save to subscriptions table
+                sub = models.Subscription(
+                    user_id=user.id,
+                    stripe_subscription_id=session["subscription"],
+                    plan_name=plan_name,
+                    status="active",
+                    current_period_start=datetime.fromtimestamp(stripe_sub.current_period_start),
+                    current_period_end=datetime.fromtimestamp(stripe_sub.current_period_end)
+                )
+                db.add(sub)
+            
+            # Record payment
+            payment = models.Payment(
+                user_id=user.id,
+                stripe_payment_intent_id=session.get("payment_intent"),
+                amount_cents=session["amount_total"],
+                currency=session["currency"],
+                status="succeeded"
+            )
+            db.add(payment)
+            db.commit()
+    
+    # Handle subscription updated
+    elif event["type"] == "customer.subscription.updated":
+        subscription_obj = event["data"]["object"]
+        sub = db.query(models.Subscription).filter(
+            models.Subscription.stripe_subscription_id == subscription_obj["id"]
+        ).first()
+        if sub:
+            sub.status = subscription_obj["status"]
+            sub.current_period_end = datetime.fromtimestamp(subscription_obj["current_period_end"])
+            sub.cancel_at_period_end = subscription_obj["cancel_at_period_end"]
+            
+            # Update user's subscription status
+            user = db.query(models.Doctor).filter(models.Doctor.id == sub.user_id).first()
+            if user:
+                user.subscription_status = subscription_obj["status"]
+                if subscription_obj["status"] != "active":
+                    user.subscription_plan = "freemium"
+            
+            db.commit()
+    
+    # Handle subscription deleted (canceled)
+    elif event["type"] == "customer.subscription.deleted":
+        subscription_obj = event["data"]["object"]
+        sub = db.query(models.Subscription).filter(
+            models.Subscription.stripe_subscription_id == subscription_obj["id"]
+        ).first()
+        if sub:
+            sub.status = "canceled"
+            user = db.query(models.Doctor).filter(models.Doctor.id == sub.user_id).first()
+            if user:
+                user.subscription_plan = "freemium"
+                user.subscription_status = "canceled"
+            db.commit()
+    
+    return {"status": "success"}
+
+
+# ========== HOSPITAL ADMIN ENDPOINTS ==========
+
+@app.get("/hospital/my-doctors")
+def get_hospital_doctors(
+    current_user: models.Doctor = Depends(require_role(['hospital_admin'])),
+    db: Session = Depends(get_db)
+):
+    """Hospital admin gets all linked doctors"""
+    
+    # Check if hospital subscription is active
+    if current_user.subscription_status != "active":
+        raise HTTPException(status_code=403, detail="Hospital subscription expired or inactive")
+    
+    doctors = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.status == 'active'
+    ).all()
+    
+    result = []
+    for hd in doctors:
+        doctor = db.query(models.Doctor).filter(models.Doctor.id == hd.doctor_id).first()
+        if doctor:
+            result.append({
+                "id": doctor.id,
+                "name": f"{doctor.first_name} {doctor.last_name}",
+                "email": doctor.email,
+                "joined_at": hd.accepted_at or hd.invited_at,
+                "predictions_count": doctor.monthly_predictions_count
+            })
+    
+    # Get plan details for limit
+    plan = db.query(models.PricingPlan).filter(
+        models.PricingPlan.name == current_user.subscription_plan
+    ).first()
+    
+    return {
+        "doctors": result,
+        "current_count": len(result),
+        "max_doctors": plan.doctor_limit if plan else 20,
+        "subscription_end": current_user.subscription_expires_at
+    }
+
+
+@app.post("/hospital/invite-doctor")
+async def invite_doctor(
+    request: dict,
+    current_user: models.Doctor = Depends(require_role(['hospital_admin'])),
+    db: Session = Depends(get_db)
+):
+    """Invite a doctor to join the hospital"""
+    
+    doctor_email = request.get("email")
+    if not doctor_email:
+        raise HTTPException(status_code=400, detail="Email required")
+    
+    # Check subscription active
+    if current_user.subscription_status != "active":
+        raise HTTPException(status_code=403, detail="Hospital subscription expired")
+    
+    # Check doctor limit
+    plan = db.query(models.PricingPlan).filter(
+        models.PricingPlan.name == current_user.subscription_plan
+    ).first()
+    
+    current_count = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.status == 'active'
+    ).count()
+    
+    if current_count >= (plan.doctor_limit if plan else 20):
+        raise HTTPException(status_code=400, detail=f"Doctor limit reached ({plan.doctor_limit})")
+    
+    # Check if doctor already exists
+    existing_doctor = db.query(models.Doctor).filter(
+        models.Doctor.email == doctor_email
+    ).first()
+    
+    if existing_doctor:
+        # Check if already linked
+        already_linked = db.query(models.HospitalDoctor).filter(
+            models.HospitalDoctor.hospital_admin_id == current_user.id,
+            models.HospitalDoctor.doctor_id == existing_doctor.id
+        ).first()
+        
+        if already_linked:
+            raise HTTPException(status_code=400, detail="Doctor already added")
+        
+        # Link existing doctor
+        hospital_doctor = models.HospitalDoctor(
+            hospital_admin_id=current_user.id,
+            doctor_id=existing_doctor.id,
+            status='active',
+            accepted_at=datetime.utcnow()
+        )
+        db.add(hospital_doctor)
+        
+        # Give them Pro features
+        existing_doctor.subscription_plan = 'hospital_pro'
+        db.commit()
+        
+        return {"message": f"Doctor {existing_doctor.email} added successfully"}
+    
+    else:
+        # Send invitation email
+        token = secrets.token_urlsafe(32)
+        invitation = models.HospitalInvitation(
+            hospital_admin_id=current_user.id,
+            doctor_email=doctor_email,
+            token=token,
+            expires_at=datetime.utcnow() + timedelta(days=7)
+        )
+        db.add(invitation)
+        db.commit()
+        
+        # Send email
+        invite_link = f"{BACKEND_URL}/signup?invite_token={token}&hospital=true"
+        send_email(
+            to=doctor_email,
+            subject="Invitation to join Heart Alert Hospital Plan",
+            html=f"""
+            <html>
+            <body>
+                <h2>You've been invited to join Heart Alert!</h2>
+                <p>Click the link below to create your account and get Pro features:</p>
+                <a href="{invite_link}">Accept Invitation</a>
+                <p>This link expires in 7 days.</p>
+            </body>
+            </html>
+            """
+        )
+        
+        return {"message": f"Invitation sent to {doctor_email}"}
+
+
+@app.delete("/hospital/remove-doctor/{doctor_id}")
+def remove_hospital_doctor(
+    doctor_id: int,
+    current_user: models.Doctor = Depends(require_role(['hospital_admin'])),
+    db: Session = Depends(get_db)
+):
+    """Remove a doctor from the hospital"""
+    
+    hospital_doctor = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.doctor_id == doctor_id,
+        models.HospitalDoctor.status == 'active'
+    ).first()
+    
+    if not hospital_doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    
+    # Remove link
+    hospital_doctor.status = 'removed'
+    hospital_doctor.removed_at = datetime.utcnow()
+    
+    # Downgrade doctor to freemium
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+    if doctor:
+        doctor.subscription_plan = 'freemium'
+    
+    db.commit()
+    
+    return {"message": "Doctor removed successfully"}
+
+
+# ========== USER SUBSCRIPTION STATUS ==========
+@app.get("/my-subscription")
+def get_my_subscription(
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current user's subscription details"""
+    
+    # Check if user is part of hospital
+    hospital_link = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.doctor_id == current_user.id,
+        models.HospitalDoctor.status == 'active'
+    ).first()
+    
+    is_hospital_linked = hospital_link is not None
+    hospital_admin_name = None
+    
+    if is_hospital_linked:
+        admin = db.query(models.Doctor).filter(
+            models.Doctor.id == hospital_link.hospital_admin_id
+        ).first()
+        hospital_admin_name = f"{admin.first_name} {admin.last_name}" if admin else None
+    
+    # Get plan details
+    plan = db.query(models.PricingPlan).filter(
+        models.PricingPlan.name == current_user.subscription_plan
+    ).first()
+    
+    return {
+        "plan": current_user.subscription_plan,
+        "status": current_user.subscription_status,
+        "expires_at": current_user.subscription_expires_at,
+        "is_hospital_linked": is_hospital_linked,
+        "hospital_admin": hospital_admin_name,
+        "monthly_predictions_used": current_user.monthly_predictions_count,
+        "prediction_limit": plan.prediction_limit if plan else 15,
+        "features": plan.features if plan else None
+    }
+

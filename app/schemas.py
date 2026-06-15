@@ -57,7 +57,8 @@ class DoctorSignup(BaseModel):
     terms_accepted: Optional[bool] = False
     role: Optional[str] = 'pending'
     assigned_to: Optional[int] = None
-
+    invite_token: Optional[str] = None  # ← ADD THIS LINE
+    
 class DoctorLogin(BaseModel):
     email: str
     password: str

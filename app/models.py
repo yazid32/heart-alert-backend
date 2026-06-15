@@ -3,7 +3,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
 from datetime import datetime
-
+import stripe
 class Doctor(Base):
     __tablename__ = "doctors"
     
@@ -42,6 +42,13 @@ class Doctor(Base):
     email_verified = Column(Boolean, default=False)
     email_verification_token = Column(String, nullable=True)
     email_verification_sent_at = Column(DateTime, nullable=True)
+    # Add to Doctor class
+    subscription_plan = Column(String(50), default="freemium")
+    subscription_status = Column(String(50), default="active")
+    subscription_expires_at = Column(DateTime, nullable=True)
+    stripe_customer_id = Column(String(255), nullable=True)
+    monthly_predictions_count = Column(Integer, default=0)
+    last_prediction_reset = Column(Date, nullable=True)
 
 
 class AssistantRequest(Base):
@@ -121,3 +128,76 @@ class SupportTicket(Base):
     admin_reply = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Add these new models
+class PricingPlan(Base):
+    __tablename__ = "pricing_plans"
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), nullable=False)
+    display_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    price_cents = Column(Integer, nullable=False)
+    currency = Column(String(3), default="usd")
+    interval_type = Column(String(20), nullable=False)
+    stripe_price_id = Column(String(255), nullable=True)
+    features = Column(JSON, nullable=True)
+    doctor_limit = Column(Integer, default=1)
+    assistant_limit = Column(Integer, default=0)
+    prediction_limit = Column(Integer, nullable=True)
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    stripe_subscription_id = Column(String(255), nullable=True)
+    plan_name = Column(String(50), nullable=True)
+    status = Column(String(50), default="active")
+    current_period_start = Column(DateTime, nullable=True)
+    current_period_end = Column(DateTime, nullable=True)
+    cancel_at_period_end = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("Doctor", backref="subscriptions")
+
+
+class HospitalDoctor(Base):
+    __tablename__ = "hospital_doctors"
+    
+    id = Column(Integer, primary_key=True)
+    hospital_admin_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    status = Column(String(50), default="active")
+    invited_at = Column(DateTime, default=datetime.utcnow)
+    accepted_at = Column(DateTime, nullable=True)
+    removed_at = Column(DateTime, nullable=True)
+
+
+class HospitalInvitation(Base):
+    __tablename__ = "hospital_invitations"
+    
+    id = Column(Integer, primary_key=True)
+    hospital_admin_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    doctor_email = Column(String(255), nullable=False)
+    token = Column(String(255), unique=True, nullable=False)
+    status = Column(String(50), default="pending")
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    subscription_id = Column(Integer, ForeignKey("subscriptions.id"), nullable=True)
+    stripe_payment_intent_id = Column(String(255), nullable=True)
+    amount_cents = Column(Integer, nullable=False)
+    currency = Column(String(3), default="usd")
+    status = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
