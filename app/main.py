@@ -2,7 +2,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
-from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File, Header, Request
 from fastapi.responses import HTMLResponse
 import shutil
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
