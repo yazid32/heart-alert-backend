@@ -1847,7 +1847,10 @@ def get_doctor_details(
         "medical_license_url": medical_license_url,
         "government_id_path": doctor.government_id_path,
         "government_id_url": government_id_url,
-        "created_at": doctor.created_at
+        "created_at": doctor.created_at,
+        "subscription_plan": doctor.subscription_plan,
+        "subscription_status": doctor.subscription_status,
+        "subscription_expires_at": doctor.subscription_expires_at,
     }
 
 @app.get("/assistant/doctor")
@@ -3002,4 +3005,3 @@ def get_my_subscription(
         "prediction_limit": plan.prediction_limit if plan else 15,
         "features": plan.features if plan else None
     }
-
