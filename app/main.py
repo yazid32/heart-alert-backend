@@ -2628,7 +2628,7 @@ async def create_checkout_session(
             success_url=request.success_url,
             cancel_url=request.cancel_url,
             metadata={
-                "user_id": current_user.id,
+                "user_id": str(current_user.id),  # MUST be string
                 "plan_name": plan.name
             }
         )
@@ -2648,60 +2648,99 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 
     payload = await request.body()
     print(f"📦 Payload length: {len(payload)}")
+    
     sig_header = request.headers.get("stripe-signature")
     print(f"🔑 Signature header: {sig_header[:20] if sig_header else 'None'}...")
+    
     webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
     print(f"🤫 Webhook secret exists: {bool(webhook_secret)}")
+    
+    if not webhook_secret:
+        print("❌ Webhook secret not configured!")
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+    
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except Exception:
+        print(f"✅ Webhook verified: {event['type']}")
+    except Exception as e:
+        print(f"❌ Webhook verification failed: {e}")
         raise HTTPException(status_code=400, detail="Invalid webhook")
     
     # Handle checkout completed
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
+        print(f"📦 Session data: {session.get('id')}")
+        
         user_id = int(session["metadata"]["user_id"])
         plan_name = session["metadata"]["plan_name"]
         
+        print(f"👤 User ID: {user_id}, Plan: {plan_name}")
+        
         user = db.query(models.Doctor).filter(models.Doctor.id == user_id).first()
+        
         if user:
+            print(f"✅ Found user: {user.email}")
+            
             # Update user's subscription
             user.subscription_plan = plan_name
             user.subscription_status = "active"
             
+            # Save Stripe customer ID if not already set
+            if session.get("customer") and not user.stripe_customer_id:
+                user.stripe_customer_id = session.get("customer")
+                print(f"💳 Saved Stripe customer: {user.stripe_customer_id}")
+            
+            # CRITICAL: Commit user update FIRST
+            db.commit()
+            print(f"✅ User {user.email} updated to {plan_name}")
+            
             # Get subscription details from Stripe
             if session.get("subscription"):
-                stripe_sub = stripe.Subscription.retrieve(session["subscription"])
-                user.subscription_expires_at = datetime.fromtimestamp(stripe_sub.current_period_end)
-                
-                # Save to subscriptions table
-                sub = models.Subscription(
-                    user_id=user.id,
-                    stripe_subscription_id=session["subscription"],
-                    plan_name=plan_name,
-                    status="active",
-                    current_period_start=datetime.fromtimestamp(stripe_sub.current_period_start),
-                    current_period_end=datetime.fromtimestamp(stripe_sub.current_period_end)
-                )
-                db.add(sub)
+                try:
+                    stripe_sub = stripe.Subscription.retrieve(session["subscription"])
+                    print(f"📅 Subscription period: {stripe_sub.current_period_start} to {stripe_sub.current_period_end}")
+                    
+                    # Save to subscriptions table
+                    sub = models.Subscription(
+                        user_id=user.id,
+                        stripe_subscription_id=session["subscription"],
+                        plan_name=plan_name,
+                        status="active",
+                        current_period_start=datetime.fromtimestamp(stripe_sub.current_period_start),
+                        current_period_end=datetime.fromtimestamp(stripe_sub.current_period_end)
+                    )
+                    db.add(sub)
+                    db.commit()
+                    print(f"✅ Subscription saved to DB")
+                    
+                except Exception as e:
+                    print(f"❌ Error retrieving Stripe subscription: {e}")
             
             # Record payment
-            payment = models.Payment(
-                user_id=user.id,
-                stripe_payment_intent_id=session.get("payment_intent"),
-                amount_cents=session["amount_total"],
-                currency=session["currency"],
-                status="succeeded"
-            )
-            db.add(payment)
-            db.commit()
+            if session.get("payment_intent"):
+                payment = models.Payment(
+                    user_id=user.id,
+                    stripe_payment_intent_id=session.get("payment_intent"),
+                    amount_cents=session["amount_total"],
+                    currency=session["currency"],
+                    status="succeeded"
+                )
+                db.add(payment)
+                db.commit()
+                print(f"✅ Payment recorded: {session['amount_total']} {session['currency']}")
+            
+        else:
+            print(f"❌ User not found for ID: {user_id}")
     
     # Handle subscription updated
     elif event["type"] == "customer.subscription.updated":
         subscription_obj = event["data"]["object"]
+        print(f"📅 Subscription updated: {subscription_obj['id']}")
+        
         sub = db.query(models.Subscription).filter(
             models.Subscription.stripe_subscription_id == subscription_obj["id"]
         ).first()
+        
         if sub:
             sub.status = subscription_obj["status"]
             sub.current_period_end = datetime.fromtimestamp(subscription_obj["current_period_end"])
@@ -2715,13 +2754,17 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                     user.subscription_plan = "freemium"
             
             db.commit()
+            print(f"✅ Subscription updated for user: {user.email if user else 'Unknown'}")
     
-    # Handle subscription deleted (canceled)
+    # Handle subscription deleted
     elif event["type"] == "customer.subscription.deleted":
         subscription_obj = event["data"]["object"]
+        print(f"❌ Subscription deleted: {subscription_obj['id']}")
+        
         sub = db.query(models.Subscription).filter(
             models.Subscription.stripe_subscription_id == subscription_obj["id"]
         ).first()
+        
         if sub:
             sub.status = "canceled"
             user = db.query(models.Doctor).filter(models.Doctor.id == sub.user_id).first()
@@ -2729,6 +2772,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                 user.subscription_plan = "freemium"
                 user.subscription_status = "canceled"
             db.commit()
+            print(f"✅ Subscription canceled for user: {user.email if user else 'Unknown'}")
     
     return {"status": "success"}
 
