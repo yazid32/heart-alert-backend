@@ -1455,6 +1455,7 @@ def get_all_doctors(
             "last_name": doctor.last_name,
             "email": doctor.email,
             "specialty": doctor.specialty,
+            "subscription_plan": doctor.subscription_plan,
             "has_assistant": assistant is not None,
             "assistant_id": assistant.id if assistant else None,
             "assistant_name": f"{assistant.first_name} {assistant.last_name}" if assistant else None
@@ -1527,6 +1528,7 @@ def get_pending_doctors(
                 "country": user.country,
                 "phone": user.phone,
                 "created_at": user.created_at,
+                "subscription_plan": user.subscription_plan,
                 "email_verified": user.email_verified,  # ADD THIS
                 "email_verification_sent_at": user.email_verification_sent_at,  # ADD THIS
                 "medical_license_url": f"{BACKEND_URL}/{user.medical_license_path}" if user.medical_license_path else None,
@@ -1698,6 +1700,7 @@ def get_all_assistants(
             "last_name": assistant.last_name,
             "email": assistant.email,
             "phone": assistant.phone,
+            "subscription_plan": assistant.subscription_plan,
             "assigned_doctor_id": assistant.assigned_to,
             "assigned_doctor_name": f"{doctor.first_name} {doctor.last_name}" if doctor else None,
             "created_at": assistant.created_at
