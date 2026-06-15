@@ -2644,11 +2644,14 @@ async def create_checkout_session(
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     """Handle Stripe webhook events"""
-    
+    print("🔔 Webhook endpoint was called!")
+
     payload = await request.body()
+    print(f"📦 Payload length: {len(payload)}")
     sig_header = request.headers.get("stripe-signature")
+    print(f"🔑 Signature header: {sig_header[:20] if sig_header else 'None'}...")
     webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
-    
+    print(f"🤫 Webhook secret exists: {bool(webhook_secret)}")
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except Exception:
