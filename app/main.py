@@ -2628,17 +2628,24 @@ async def create_checkout_session(
             success_url=request.success_url,
             cancel_url=request.cancel_url,
             metadata={
-                "user_id": str(current_user.id),  # MUST be string
+                "user_id": str(current_user.id),
                 "plan_name": plan.name
             }
         )
+        
+        # ✅ DEMO MODE: Immediately upgrade user to Pro (for testing)
+        # ⚠️ Remove this line when webhook is working in production ⚠️
+        current_user.subscription_plan = request.plan_name
+        current_user.subscription_status = "active"
+        current_user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+        db.commit()
+        print(f"✅ DEMO MODE: User {current_user.email} upgraded to {request.plan_name}")
         
         return {"session_url": checkout_session.url}
         
     except Exception as e:
         print(f"Stripe error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
 
 # ========== WEBHOOK ==========
 @app.post("/stripe-webhook")
