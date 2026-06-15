@@ -2426,6 +2426,16 @@ def get_admin_stats(
         models.SupportTicket.status == 'open'
     ).count()
     
+    pro_users = db.query(models.Doctor).filter(
+        models.Doctor.subscription_plan == 'pro',
+        models.Doctor.subscription_status == 'active'
+    ).count()
+    
+    hospital_users = db.query(models.Doctor).filter(
+        models.Doctor.subscription_plan.in_(['hospital', 'hospital_pro']),
+        models.Doctor.subscription_status == 'active'
+    ).count()
+
     return {
         "doctors": total_doctors,
         "assistants": total_assistants,
@@ -2438,6 +2448,8 @@ def get_admin_stats(
         "week_predictions": week_predictions,
         "pending_requests": pending_requests,
         "open_tickets": open_tickets,
+        "pro_users": pro_users,
+        "hospital_users": hospital_users,
     }
 
 
