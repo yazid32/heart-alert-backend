@@ -192,8 +192,15 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
                 print(f"✅ Valid invitation found for: {invitation.doctor_email}")
                 print(f"📧 Signup email: {email}")
                 print(f"📧 Invitation email: {invitation.doctor_email}")
+                
+                # ✅ Check if the emails match EXACTLY
+                if invitation.doctor_email != email:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"This invitation is for {invitation.doctor_email}, not {email}. Please use the correct email."
+                    )
         
-        # ✅ Check if email exists using EXACT email
+        # Check if email already exists
         existing = db.query(models.Doctor).filter(
             models.Doctor.email == email
         ).first()
@@ -201,6 +208,36 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         # If user exists and has invitation
         if existing and invitation:
             print(f"✅ Existing user found: {existing.email}")
+            
+            # ✅ Check if already linked to this hospital
+            existing_link = db.query(models.HospitalDoctor).filter(
+                models.HospitalDoctor.hospital_admin_id == invitation.hospital_admin_id,
+                models.HospitalDoctor.doctor_id == existing.id
+            ).first()
+            
+            if existing_link:
+                # Already linked, just update invitation status
+                invitation.status = 'used'
+                db.commit()
+                print(f"✅ Doctor already linked to hospital, invitation marked as used")
+                
+                access_token = create_access_token(data={"sub": str(existing.id)})
+                return {
+                    "access_token": access_token,
+                    "refresh_token": None,
+                    "token_type": "bearer",
+                    "expires_in": 86400,
+                    "remember_me": False,
+                    "doctor_id": existing.id,
+                    "email": existing.email,
+                    "first_name": existing.first_name,
+                    "last_name": existing.last_name,
+                    "profile_picture": existing.profile_picture,
+                    "role": existing.role,
+                    "status": existing.status,
+                    "email_verified": existing.email_verified,
+                    "subscription_plan": existing.subscription_plan
+                }
             
             # Link existing doctor to hospital
             hospital_doctor = models.HospitalDoctor(
@@ -250,11 +287,10 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             subscription_plan = 'pro'
             print(f"✅ New user with hospital invite from admin: {hospital_admin_id}")
         
-        # ✅ Save the EXACT email
         verification_token = secrets.token_urlsafe(32)
         
         new_doctor = models.Doctor(
-            email=email,  # ← EXACT email, NOT normalized
+            email=email,  # ✅ EXACT email
             password_hash=hash_password(doctor_data.password),
             first_name=doctor_data.first_name,
             last_name=doctor_data.last_name,
@@ -305,7 +341,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             "expires_in": 86400,
             "remember_me": False,
             "doctor_id": new_doctor.id,
-            "email": new_doctor.email,  # ← Returns EXACT email
+            "email": new_doctor.email,
             "first_name": new_doctor.first_name,
             "last_name": new_doctor.last_name,
             "profile_picture": new_doctor.profile_picture,
@@ -323,8 +359,8 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
-
+    
+    
 @app.post("/login")
 def login(login_data: DoctorLogin, db: Session = Depends(get_db)):
     """Login - NO email normalization"""
