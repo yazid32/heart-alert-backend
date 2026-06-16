@@ -355,13 +355,16 @@ def login(
         "token_type": "bearer",
         "expires_in": 86400,
         "remember_me": login_data.remember_me,
+        "id": doctor.id,
         "doctor_id": doctor.id,
         "email": doctor.email,
         "first_name": doctor.first_name,
         "last_name": doctor.last_name,
         "profile_picture": doctor.profile_picture,
         "role": doctor.role,
-        "status": doctor.status
+        "status": doctor.status,
+        "subscription_plan": doctor.subscription_plan if doctor.subscription_plan else "freemium",
+        "plan": doctor.subscription_plan if doctor.subscription_plan else "freemium",
     }
 
 @app.post("/check-email")
