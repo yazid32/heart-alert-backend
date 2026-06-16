@@ -3100,24 +3100,25 @@ def cancel_hospital_invitation(
 ):
     """Cancel a pending invitation"""
     
+    # Check if user has hospital subscription
     if current_user.subscription_plan != "hospital":
         raise HTTPException(status_code=403, detail="Hospital subscription required")
     
+    # Find the invitation
     invitation = db.query(models.HospitalInvitation).filter(
         models.HospitalInvitation.id == invitation_id,
-        models.HospitalInvitation.hospital_admin_id == current_user.id
+        models.HospitalInvitation.hospital_admin_id == current_user.id,
+        models.HospitalInvitation.status == "pending"
     ).first()
     
     if not invitation:
         raise HTTPException(status_code=404, detail="Invitation not found")
     
+    # Delete the invitation
     db.delete(invitation)
     db.commit()
     
-    return {"message": "Invitation cancelled"}
-
-    # Add this endpoint to main.py
-
+    return {"message": "Invitation cancelled successfully"}
 # In main.py, update the invite_redirect endpoint
 
 @app.get("/invite-redirect")
