@@ -2939,10 +2939,13 @@ async def invite_doctor(
 @app.delete("/hospital/remove-doctor/{doctor_id}")
 def remove_hospital_doctor(
     doctor_id: int,
-    current_user: models.Doctor = Depends(require_role(['hospital_admin'])),
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
     db: Session = Depends(get_db)
 ):
-    """Remove a doctor from the hospital"""
+    """Remove a doctor from the hospital and revert to freemium"""
+    
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
     
     hospital_doctor = db.query(models.HospitalDoctor).filter(
         models.HospitalDoctor.hospital_admin_id == current_user.id,
@@ -2951,21 +2954,21 @@ def remove_hospital_doctor(
     ).first()
     
     if not hospital_doctor:
-        raise HTTPException(status_code=404, detail="Doctor not found")
+        raise HTTPException(status_code=404, detail="Doctor not found in your hospital")
     
-    # Remove link
+    # Remove the link
     hospital_doctor.status = 'removed'
     hospital_doctor.removed_at = datetime.utcnow()
     
-    # Downgrade doctor to freemium
+    # Revert doctor to freemium
     doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
     if doctor:
         doctor.subscription_plan = 'freemium'
+        doctor.subscription_status = 'active'
     
     db.commit()
     
-    return {"message": "Doctor removed successfully"}
-
+    return {"message": "Doctor removed and reverted to Freemium"}
 
 # ========== USER SUBSCRIPTION STATUS ==========
 @app.get("/my-subscription")
