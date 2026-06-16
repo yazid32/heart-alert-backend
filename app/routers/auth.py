@@ -265,13 +265,22 @@ async def invite_doctor(
     if current_user.subscription_plan != "hospital":
         raise HTTPException(status_code=403, detail="Hospital subscription required")
     
-    # Check if doctor already exists
+    # Check if a pending invitation already exists for this email
+    existing_invitation = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.hospital_admin_id == current_user.id,
+        models.HospitalInvitation.doctor_email == request.email,
+        models.HospitalInvitation.status == "pending"
+    ).first()
+
+    if existing_invitation:
+        raise HTTPException(status_code=400, detail="Already invited")
+
+    # Check if doctor already exists and is linked
     existing_doctor = db.query(models.Doctor).filter(
         models.Doctor.email == request.email
     ).first()
     
     if existing_doctor:
-        # Check if already linked to this hospital
         existing_link = db.query(models.HospitalDoctor).filter(
             models.HospitalDoctor.hospital_admin_id == current_user.id,
             models.HospitalDoctor.doctor_id == existing_doctor.id

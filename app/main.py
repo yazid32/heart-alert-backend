@@ -3118,40 +3118,124 @@ def cancel_hospital_invitation(
 
     # Add this endpoint to main.py
 
+# In main.py, update the invite_redirect endpoint
+
 @app.get("/invite-redirect")
-def invite_redirect(token: str, user_agent: str = Header(None)):
+def invite_redirect(token: str, user_agent: Optional[str] = Header(None)):  # ✅ ADD Optional and default None
     """Redirect to the appropriate signup page based on device"""
     
-    is_mobile = any(device in user_agent.lower() for device in ['android', 'ios', 'iphone', 'ipad'])
+    FRONTEND_URL = "https://heartalert.netlify.app"  # Your Netlify URL
     
+    # ✅ FIX BUG 3: Handle None user_agent
+    is_mobile = False
+    if user_agent:
+        user_agent_lower = user_agent.lower()
+        is_mobile = any(device in user_agent_lower for device in ['android', 'ios', 'iphone', 'ipad', 'mobile'])
+    
+    print(f"📱 User-Agent: {user_agent}")
+    print(f"📱 Is mobile: {is_mobile}")
+    
+    # Mobile: Use JavaScript redirect (works better than meta refresh)
     if is_mobile:
-        # Mobile: Use deep link to open the app
-        redirect_url = f"heartalert://signup?invite_token={token}"
+        deep_link = f"heartalert://signup?invite_token={token}"
         html_content = f"""
+        <!DOCTYPE html>
         <html>
         <head>
-            <meta http-equiv="refresh" content="0;url={redirect_url}">
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Opening Heart Alert...</title>
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    background: #f5f5f0;
+                    margin: 0;
+                    padding: 0;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    text-align: center;
+                }}
+                .container {{
+                    max-width: 300px;
+                    padding: 20px;
+                }}
+                .logo {{
+                    width: 80px;
+                    height: 80px;
+                    background: #7A9E7E;
+                    border-radius: 20px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin: 0 auto 20px;
+                    font-size: 40px;
+                }}
+                h2 {{
+                    color: #2C3E2F;
+                    margin-bottom: 10px;
+                }}
+                p {{
+                    color: #666;
+                    line-height: 1.5;
+                }}
+                .button {{
+                    display: inline-block;
+                    background: #7A9E7E;
+                    color: white;
+                    padding: 12px 24px;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    margin-top: 20px;
+                }}
+                .fallback {{
+                    margin-top: 30px;
+                    font-size: 12px;
+                    color: #999;
+                }}
+            </style>
         </head>
         <body>
-            <p>Opening app...</p>
-            <a href="{redirect_url}">Click here if app doesn't open</a>
+            <div class="container">
+                <div class="logo">❤️</div>
+                <h2>Heart Alert</h2>
+                <p>Opening the app to complete your registration...</p>
+                <a href="{deep_link}" class="button">Open App</a>
+                <div class="fallback">
+                    <p>Don't have the app? <a href="{FRONTEND_URL}/#/signup?invite_token={token}">Sign up on web</a></p>
+                    <p style="margin-top: 10px;">Can't open the app? <a href="{FRONTEND_URL}/#/signup?invite_token={token}">Continue in browser</a></p>
+                </div>
+            </div>
+            <script>
+                // ✅ FIX BUG 4: Use JavaScript redirect instead of meta refresh
+                window.location.href = "{deep_link}";
+                
+                // Fallback: if app doesn't open after 2.5 seconds, show web option
+                setTimeout(function() {{
+                    // User can click the web link manually
+                    console.log("App didn't open, user can click web link");
+                }}, 2500);
+            </script>
         </body>
         </html>
         """
     else:
         # Web: Redirect to web signup page
-        FRONTEND_URL = "https://heartalert.netlify.app"  # Your Netlify URL
         redirect_url = f"{FRONTEND_URL}/#/signup?invite_token={token}"
         html_content = f"""
+        <!DOCTYPE html>
         <html>
         <head>
             <meta http-equiv="refresh" content="0;url={redirect_url}">
+            <title>Redirecting to Heart Alert...</title>
         </head>
         <body>
             <p>Redirecting to signup...</p>
-            <a href="{redirect_url}">Click here if not redirected</a>
+            <p><a href="{redirect_url}">Click here if not redirected</a></p>
         </body>
         </html>
         """
     
     return HTMLResponse(content=html_content)
+
