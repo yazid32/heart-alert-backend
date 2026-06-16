@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from pydantic import BaseModel  # ADD THIS
+from pydantic import BaseModel
 from app.database import get_db
 from app import models
 from app.auth_config import verify_password, create_access_token, create_refresh_token, decode_refresh_token, decode_access_token
@@ -54,10 +54,10 @@ async def get_current_user(
 
 @router.post("/login")
 async def login(
-    login_data: LoginRequest,  # CHANGED: Now accepts JSON body
+    login_data: LoginRequest,  # CHANGE THIS - use JSON body
     db: Session = Depends(get_db)
 ):
-    print(f"🔐 Login attempt for: {login_data.email}")
+    print(f"🔐 Login attempt: {login_data.email}")
     
     # Find user
     user = db.query(models.Doctor).filter(models.Doctor.email == login_data.email).first()
@@ -65,7 +65,10 @@ async def login(
     if not user or not verify_password(login_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    print(f"✅ User found: {user.email}, subscription_plan: {user.subscription_plan}")
+    print(f"✅ User found: {user.email}")
+    print(f"✅ subscription_plan from DB: '{user.subscription_plan}'")
+    print(f"✅ role: '{user.role}'")
+    print(f"✅ status: '{user.status}'")
     
     # Create tokens with user data
     access_token = create_access_token(data={
@@ -82,7 +85,7 @@ async def login(
             "doctor_id": user.id
         })
     
-    # Return complete user data including subscription plan
+    # IMPORTANT: Return subscription_plan explicitly
     response_data = {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -102,7 +105,7 @@ async def login(
         "plan": user.subscription_plan if user.subscription_plan else "freemium",
     }
     
-    print(f"📤 Response data: {response_data}")
+    print(f"📤 Response subscription_plan: {response_data['subscription_plan']}")
     return response_data
 
 
