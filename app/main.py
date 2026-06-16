@@ -3008,3 +3008,113 @@ def get_my_subscription(
         "prediction_limit": plan.prediction_limit if plan else 15,
         "features": plan.features if plan else None
     }
+
+    
+@app.get("/hospital/stats")
+def get_hospital_stats(
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
+    db: Session = Depends(get_db)
+):
+    """Get hospital statistics for the dashboard"""
+    
+    # Check if user has hospital subscription
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    # Get doctors count
+    hospital_doctors = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.status == 'active'
+    ).count()
+    
+    return {
+        "total_doctors": hospital_doctors,
+        "total_patients": 0,
+        "total_predictions": 0,
+        "total_assistants": 0,
+    }
+
+
+@app.get("/hospital/doctors")
+def get_hospital_doctors_list(
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
+    db: Session = Depends(get_db)
+):
+    """Get all doctors linked to this hospital"""
+    
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    hospital_doctors = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.status == 'active'
+    ).all()
+    
+    result = []
+    for hd in hospital_doctors:
+        doctor = db.query(models.Doctor).filter(models.Doctor.id == hd.doctor_id).first()
+        if doctor:
+            result.append({
+                "id": doctor.id,
+                "name": f"Dr. {doctor.first_name} {doctor.last_name}",
+                "first_name": doctor.first_name,
+                "last_name": doctor.last_name,
+                "email": doctor.email,
+                "specialty": doctor.specialty or "General Practitioner",
+                "status": "active"
+            })
+    
+    return result
+
+
+@app.get("/hospital/pending-invitations")
+def get_pending_hospital_invitations(
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
+    db: Session = Depends(get_db)
+):
+    """Get pending invitations sent by this hospital"""
+    
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    invitations = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.hospital_admin_id == current_user.id,
+        models.HospitalInvitation.status == "pending"
+    ).all()
+    
+    return [
+        {
+            "id": inv.id,
+            "email": inv.doctor_email,
+            "name": "Pending Doctor",
+            "specialty": "Pending",
+            "status": inv.status,
+            "created_at": inv.created_at
+        }
+        for inv in invitations
+    ]
+
+
+@app.delete("/hospital/cancel-invitation/{invitation_id}")
+def cancel_hospital_invitation(
+    invitation_id: int,
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
+    db: Session = Depends(get_db)
+):
+    """Cancel a pending invitation"""
+    
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    invitation = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.id == invitation_id,
+        models.HospitalInvitation.hospital_admin_id == current_user.id
+    ).first()
+    
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    
+    db.delete(invitation)
+    db.commit()
+    
+    return {"message": "Invitation cancelled"}

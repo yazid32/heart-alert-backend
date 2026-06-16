@@ -5,9 +5,12 @@ from pydantic import BaseModel
 from app.database import get_db
 from app import models
 from app.auth_config import verify_password, create_access_token, create_refresh_token, decode_refresh_token, decode_access_token
+from datetime import datetime, timedelta
+import secrets
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-
+class InviteDoctorRequest(BaseModel):
+    email: str
 # ADD THIS MODEL
 class LoginRequest(BaseModel):
     email: str
@@ -170,3 +173,180 @@ async def get_current_user_info(
         "email_verified": current_user.email_verified,
         "created_at": current_user.created_at,
     }
+
+
+# Add these endpoints to your auth.py (after your existing endpoints)
+
+@router.get("/hospital/stats")
+async def get_hospital_stats(
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Only hospital admins can access
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    # Get doctors count
+    hospital_doctors = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.status == "active"
+    ).count()
+    
+    return {
+        "total_doctors": hospital_doctors,
+        "total_patients": 0,
+        "total_predictions": 0,
+        "total_assistants": 0,
+    }
+
+
+@router.get("/hospital/doctors")
+async def get_hospital_doctors(
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    hospital_doctors = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.status == "active"
+    ).all()
+    
+    result = []
+    for hd in hospital_doctors:
+        doctor = db.query(models.Doctor).filter(models.Doctor.id == hd.doctor_id).first()
+        if doctor:
+            result.append({
+                "id": doctor.id,
+                "name": f"Dr. {doctor.first_name} {doctor.last_name}",
+                "first_name": doctor.first_name,
+                "last_name": doctor.last_name,
+                "email": doctor.email,
+                "specialty": doctor.specialty,
+                "status": "active"
+            })
+    
+    return result
+
+
+@router.get("/hospital/pending-invitations")
+async def get_pending_invitations(
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    invitations = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.hospital_admin_id == current_user.id,
+        models.HospitalInvitation.status == "pending"
+    ).all()
+    
+    return [
+        {
+            "id": inv.id,
+            "email": inv.doctor_email,
+            "name": "Pending Doctor",
+            "specialty": "Pending",
+            "status": inv.status,
+            "created_at": inv.created_at
+        }
+        for inv in invitations
+    ]
+
+
+@router.post("/hospital/invite-doctor")
+async def invite_doctor(
+    request: InviteDoctorRequest,
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    # Check if doctor already exists
+    existing_doctor = db.query(models.Doctor).filter(
+        models.Doctor.email == request.email
+    ).first()
+    
+    if existing_doctor:
+        # Check if already linked to this hospital
+        existing_link = db.query(models.HospitalDoctor).filter(
+            models.HospitalDoctor.hospital_admin_id == current_user.id,
+            models.HospitalDoctor.doctor_id == existing_doctor.id
+        ).first()
+        
+        if existing_link:
+            raise HTTPException(status_code=400, detail="Doctor already in your hospital")
+    
+    # Create invitation
+    token = secrets.token_urlsafe(32)
+    invitation = models.HospitalInvitation(
+        hospital_admin_id=current_user.id,
+        doctor_email=request.email,
+        token=token,
+        status="pending",
+        expires_at=datetime.utcnow() + timedelta(days=7)
+    )
+    
+    db.add(invitation)
+    db.commit()
+    
+    # TODO: Send email with invitation link
+    # invitation_link = f"https://yourdomain.com/signup?token={token}"
+    
+    return {"message": "Invitation sent", "token": token}
+
+
+@router.delete("/hospital/cancel-invitation/{invitation_id}")
+async def cancel_invitation(
+    invitation_id: int,
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    invitation = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.id == invitation_id,
+        models.HospitalInvitation.hospital_admin_id == current_user.id
+    ).first()
+    
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    
+    db.delete(invitation)
+    db.commit()
+    
+    return {"message": "Invitation cancelled"}
+
+
+@router.delete("/hospital/remove-doctor/{doctor_id}")
+async def remove_doctor(
+    doctor_id: int,
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    hospital_doctor = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == current_user.id,
+        models.HospitalDoctor.doctor_id == doctor_id
+    ).first()
+    
+    if not hospital_doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    
+    # Remove association
+    db.delete(hospital_doctor)
+    
+    # Revert doctor's subscription to freemium
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+    if doctor:
+        doctor.subscription_plan = "freemium"
+    
+    db.commit()
+    
+    return {"message": "Doctor removed successfully"}
