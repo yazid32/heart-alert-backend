@@ -176,8 +176,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     """Register a new doctor - requires email verification"""
     
     print(f"1. Received signup for: {doctor_data.email}")
-    print(f"2. Selected role: {doctor_data.role}")
-    print(f"3. Invite token: {doctor_data.invite_token}")  # ADD THIS
+    print(f"2. Invite token: {doctor_data.invite_token}")
     
     try:
         # Check if email already exists
@@ -190,7 +189,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         user_status = 'pending'
         
         # Check if this is a hospital invite
-        subscription_plan = 'freemium'  # default
+        subscription_plan = 'freemium'
         is_hospital_invite = False
         hospital_admin_id = None
         
@@ -205,13 +204,11 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             if invitation:
                 is_hospital_invite = True
                 hospital_admin_id = invitation.hospital_admin_id
-                subscription_plan = 'hospital_pro'  # Hospital pays, doctor gets Pro
+                subscription_plan = 'pro'  # Doctor gets Pro for free
                 print(f"✅ Hospital invite accepted from admin ID: {hospital_admin_id}")
         
         # Generate email verification token
         verification_token = secrets.token_urlsafe(32)
-        
-        print(f"Setting role to: {user_role} (needs admin approval)")
         
         new_doctor = models.Doctor(
             email=doctor_data.email,
@@ -234,11 +231,10 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             email_verified=False,
             email_verification_token=verification_token,
             email_verification_sent_at=datetime.utcnow(),
-            # ========== SUBSCRIPTION FIELDS ==========
-            subscription_plan=subscription_plan,  # ADD THIS
-            subscription_status='active',  # ADD THIS
-            monthly_predictions_count=0,  # ADD THIS
-            last_prediction_reset=datetime.utcnow().date(),  # ADD THIS
+            subscription_plan=subscription_plan,
+            subscription_status='active',
+            monthly_predictions_count=0,
+            last_prediction_reset=datetime.utcnow().date(),
         )
         
         db.add(new_doctor)
@@ -262,11 +258,8 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             
             print(f"✅ Doctor {new_doctor.email} linked to hospital admin {hospital_admin_id}")
         
-        # Create JWT token (they can login but with restricted access until approved AND verified)
+        # Create JWT token
         access_token = create_access_token(data={"sub": str(new_doctor.id)})
-        
-        print(f"User created with ID: {new_doctor.id}, waiting for admin approval and email verification")
-        print(f"Subscription plan: {subscription_plan}")
         
         # Send verification email
         try:
@@ -276,27 +269,24 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
                 subject="Verify Your Heart Alert Email Address",
                 html=f"""
                 <html>
-                <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
-                    <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
-                        <h2 style="color: #7A9E7E;">Heart Alert</h2>
-                        <p style="color: #444;">Hello {new_doctor.first_name},</p>
-                        <p style="color: #444;">Thank you for registering. Please verify your email address:</p>
-                        <div style="text-align: center; margin: 32px 0;">
+                <body style="font-family: Arial, sans-serif;">
+                    <div style="max-width: 480px; margin: auto; padding: 20px;">
+                        <h2 style="color: #7A9E7E;">Welcome to Heart Alert!</h2>
+                        <p>Hello {new_doctor.first_name},</p>
+                        <p>Please verify your email address to complete your registration.</p>
+                        <div style="text-align: center; margin: 30px 0;">
                             <a href="{verification_link}"
-                               style="background-color: #7A9E7E; color: white; padding: 14px 32px;
-                                      text-decoration: none; border-radius: 8px; font-size: 16px;
-                                      font-weight: bold; display: inline-block;">
+                               style="background-color: #7A9E7E; color: white; padding: 12px 24px;
+                                      text-decoration: none; border-radius: 8px;">
                                 Verify Email
                             </a>
                         </div>
-                        <p style="color: #888; font-size: 13px;">This link expires in 24 hours.</p>
-                        <p style="color: #888; font-size: 13px;">After verification, an admin will review your application.</p>
+                        <p style="color: #888; font-size: 12px;">This link expires in 24 hours.</p>
                     </div>
                 </body>
                 </html>
                 """
             )
-            print(f"✅ Verification email sent to {new_doctor.email}")
         except Exception as e:
             print(f"❌ Failed to send verification email: {e}")
         
@@ -314,7 +304,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             "role": new_doctor.role,
             "status": new_doctor.status,
             "email_verified": False,
-            "subscription_plan": subscription_plan  # ADD THIS to response
+            "subscription_plan": subscription_plan
         }
         
     except Exception as e:
@@ -2851,7 +2841,7 @@ def get_hospital_doctors(
 @app.post("/hospital/invite-doctor")
 async def invite_doctor(
     request: dict,
-    current_user: models.Doctor = Depends(require_role(['doctor'])),  # CHANGE FROM 'hospital_admin' TO 'doctor'
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
     db: Session = Depends(get_db)
 ):
     """Invite a doctor to join the hospital"""
@@ -2911,27 +2901,40 @@ async def invite_doctor(
         db.add(invitation)
         db.commit()
         
-        # Send email
-        invite_link = f"{BACKEND_URL}/signup?invite_token={token}"
+        # Create redirect link (handles both web and mobile)
+        invite_link = f"{BACKEND_URL}/invite-redirect?token={token}"
+        
         try:
             send_email(
                 to=doctor_email,
-                subject="Invitation to join Heart Alert",
+                subject="Invitation to join Heart Alert Hospital Plan",
                 html=f"""
                 <html>
-                <body>
-                    <h2>You've been invited to join Heart Alert!</h2>
-                    <p>Click the link below to create your account:</p>
-                    <a href="{invite_link}">Accept Invitation</a>
-                    <p>This link expires in 7 days.</p>
+                <body style="font-family: Arial, sans-serif;">
+                    <div style="max-width: 480px; margin: auto; padding: 20px;">
+                        <h2 style="color: #7A9E7E;">You've been invited!</h2>
+                        <p>Dr. {current_user.first_name} {current_user.last_name} has invited you to join their hospital on Heart Alert.</p>
+                        <p>You will get <strong>FREE Pro access</strong> under their hospital subscription.</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="{invite_link}"
+                               style="background-color: #7A9E7E; color: white; padding: 12px 24px;
+                                      text-decoration: none; border-radius: 8px;">
+                                Accept Invitation
+                            </a>
+                        </div>
+                        <p style="color: #888; font-size: 12px;">This link expires in 7 days.</p>
+                        <p style="color: #888; font-size: 12px;">If you already have an account, you will be prompted to login.</p>
+                    </div>
                 </body>
                 </html>
                 """
             )
+            print(f"✅ Invitation email sent to {doctor_email}")
         except Exception as e:
-            print(f"Failed to send email: {e}")
+            print(f"❌ Failed to send email: {e}")
         
         return {"message": f"Invitation sent to {doctor_email}"}
+
 
 @app.delete("/hospital/remove-doctor/{doctor_id}")
 def remove_hospital_doctor(
@@ -3112,3 +3115,43 @@ def cancel_hospital_invitation(
     db.commit()
     
     return {"message": "Invitation cancelled"}
+
+    # Add this endpoint to main.py
+
+@app.get("/invite-redirect")
+def invite_redirect(token: str, user_agent: str = Header(None)):
+    """Redirect to the appropriate signup page based on device"""
+    
+    is_mobile = any(device in user_agent.lower() for device in ['android', 'ios', 'iphone', 'ipad'])
+    
+    if is_mobile:
+        # Mobile: Use deep link to open the app
+        redirect_url = f"heartalert://signup?invite_token={token}"
+        html_content = f"""
+        <html>
+        <head>
+            <meta http-equiv="refresh" content="0;url={redirect_url}">
+        </head>
+        <body>
+            <p>Opening app...</p>
+            <a href="{redirect_url}">Click here if app doesn't open</a>
+        </body>
+        </html>
+        """
+    else:
+        # Web: Redirect to web signup page
+        FRONTEND_URL = "https://heartalert.netlify.app"  # Your Netlify URL
+        redirect_url = f"{FRONTEND_URL}/#/signup?invite_token={token}"
+        html_content = f"""
+        <html>
+        <head>
+            <meta http-equiv="refresh" content="0;url={redirect_url}">
+        </head>
+        <body>
+            <p>Redirecting to signup...</p>
+            <a href="{redirect_url}">Click here if not redirected</a>
+        </body>
+        </html>
+        """
+    
+    return HTMLResponse(content=html_content)
