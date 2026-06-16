@@ -2851,7 +2851,7 @@ def get_hospital_doctors(
 @app.post("/hospital/invite-doctor")
 async def invite_doctor(
     request: dict,
-    current_user: models.Doctor = Depends(require_role(['hospital_admin'])),
+    current_user: models.Doctor = Depends(require_role(['doctor'])),  # CHANGE FROM 'hospital_admin' TO 'doctor'
     db: Session = Depends(get_db)
 ):
     """Invite a doctor to join the hospital"""
@@ -2860,22 +2860,13 @@ async def invite_doctor(
     if not doctor_email:
         raise HTTPException(status_code=400, detail="Email required")
     
+    # Check subscription is hospital
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
     # Check subscription active
     if current_user.subscription_status != "active":
         raise HTTPException(status_code=403, detail="Hospital subscription expired")
-    
-    # Check doctor limit
-    plan = db.query(models.PricingPlan).filter(
-        models.PricingPlan.name == current_user.subscription_plan
-    ).first()
-    
-    current_count = db.query(models.HospitalDoctor).filter(
-        models.HospitalDoctor.hospital_admin_id == current_user.id,
-        models.HospitalDoctor.status == 'active'
-    ).count()
-    
-    if current_count >= (plan.doctor_limit if plan else 20):
-        raise HTTPException(status_code=400, detail=f"Doctor limit reached ({plan.doctor_limit})")
     
     # Check if doctor already exists
     existing_doctor = db.query(models.Doctor).filter(
@@ -2890,7 +2881,7 @@ async def invite_doctor(
         ).first()
         
         if already_linked:
-            raise HTTPException(status_code=400, detail="Doctor already added")
+            raise HTTPException(status_code=400, detail="Doctor already added to your hospital")
         
         # Link existing doctor
         hospital_doctor = models.HospitalDoctor(
@@ -2902,7 +2893,8 @@ async def invite_doctor(
         db.add(hospital_doctor)
         
         # Give them Pro features
-        existing_doctor.subscription_plan = 'hospital_pro'
+        existing_doctor.subscription_plan = 'pro'
+        existing_doctor.subscription_status = 'active'
         db.commit()
         
         return {"message": f"Doctor {existing_doctor.email} added successfully"}
@@ -2920,24 +2912,26 @@ async def invite_doctor(
         db.commit()
         
         # Send email
-        invite_link = f"{BACKEND_URL}/signup?invite_token={token}&hospital=true"
-        send_email(
-            to=doctor_email,
-            subject="Invitation to join Heart Alert Hospital Plan",
-            html=f"""
-            <html>
-            <body>
-                <h2>You've been invited to join Heart Alert!</h2>
-                <p>Click the link below to create your account and get Pro features:</p>
-                <a href="{invite_link}">Accept Invitation</a>
-                <p>This link expires in 7 days.</p>
-            </body>
-            </html>
-            """
-        )
+        invite_link = f"{BACKEND_URL}/signup?invite_token={token}"
+        try:
+            send_email(
+                to=doctor_email,
+                subject="Invitation to join Heart Alert",
+                html=f"""
+                <html>
+                <body>
+                    <h2>You've been invited to join Heart Alert!</h2>
+                    <p>Click the link below to create your account:</p>
+                    <a href="{invite_link}">Accept Invitation</a>
+                    <p>This link expires in 7 days.</p>
+                </body>
+                </html>
+                """
+            )
+        except Exception as e:
+            print(f"Failed to send email: {e}")
         
         return {"message": f"Invitation sent to {doctor_email}"}
-
 
 @app.delete("/hospital/remove-doctor/{doctor_id}")
 def remove_hospital_doctor(
