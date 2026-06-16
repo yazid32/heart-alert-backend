@@ -3240,3 +3240,69 @@ def invite_redirect(token: str, user_agent: Optional[str] = Header(None)):  # �
     
     return HTMLResponse(content=html_content)
 
+@app.post("/hospital/resend-invitation")
+def resend_hospital_invitation(
+    request: dict,
+    current_user: models.Doctor = Depends(require_role(['doctor'])),
+    db: Session = Depends(get_db)
+):
+    """Resend a pending invitation"""
+    
+    # Check if user has hospital subscription
+    if current_user.subscription_plan != "hospital":
+        raise HTTPException(status_code=403, detail="Hospital subscription required")
+    
+    invitation_id = request.get("invitation_id")
+    if not invitation_id:
+        raise HTTPException(status_code=400, detail="Invitation ID required")
+    
+    # Find the invitation
+    invitation = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.id == invitation_id,
+        models.HospitalInvitation.hospital_admin_id == current_user.id,
+        models.HospitalInvitation.status == "pending"
+    ).first()
+    
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    
+    # Generate new token
+    import secrets
+    new_token = secrets.token_urlsafe(32)
+    invitation.token = new_token
+    invitation.expires_at = datetime.utcnow() + timedelta(days=7)
+    db.commit()
+    
+    # Resend email
+    invite_link = f"{BACKEND_URL}/invite-redirect?token={new_token}"
+    
+    try:
+        send_email(
+            to=invitation.doctor_email,
+            subject="Invitation to join Heart Alert (Resent)",
+            html=f"""
+            <html>
+            <body style="font-family: Arial, sans-serif;">
+                <div style="max-width: 480px; margin: auto; padding: 20px;">
+                    <h2 style="color: #7A9E7E;">You've been invited!</h2>
+                    <p>This is a reminder to accept your invitation to join Heart Alert.</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{invite_link}"
+                           style="background-color: #7A9E7E; color: white; padding: 12px 24px;
+                                  text-decoration: none; border-radius: 8px;">
+                            Accept Invitation
+                        </a>
+                    </div>
+                    <p style="color: #888; font-size: 12px;">This link expires in 7 days.</p>
+                </div>
+            </body>
+            </html>
+            """
+        )
+        print(f"✅ Invitation resent to {invitation.doctor_email}")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
+    
+    return {"message": "Invitation resent successfully"}
+
+
