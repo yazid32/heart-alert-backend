@@ -179,22 +179,9 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     print(f"2. Invite token: {doctor_data.invite_token}")
     
     try:
-        # Check if email already exists
-        existing = db.query(models.Doctor).filter(models.Doctor.email == doctor_data.email).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already registered")
-        
-        # Both doctors and assistants start as 'pending' (needs admin approval)
-        user_role = 'pending'
-        user_status = 'pending'
-        
         # Check if this is a hospital invite
-        subscription_plan = 'freemium'
-        is_hospital_invite = False
-        hospital_admin_id = None
-        
+        invitation = None
         if doctor_data.invite_token:
-            # Find the invitation
             invitation = db.query(models.HospitalInvitation).filter(
                 models.HospitalInvitation.token == doctor_data.invite_token,
                 models.HospitalInvitation.expires_at > datetime.utcnow(),
@@ -202,13 +189,78 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             ).first()
             
             if invitation:
-                is_hospital_invite = True
-                hospital_admin_id = invitation.hospital_admin_id
-                subscription_plan = 'pro'  # Doctor gets Pro for free
-                print(f"✅ Hospital invite accepted from admin ID: {hospital_admin_id}")
+                print(f"✅ Valid invitation found for: {invitation.doctor_email}")
+                print(f"📧 Signup email: {doctor_data.email}")
+                print(f"📧 Invitation email: {invitation.doctor_email}")
         
-        # Generate email verification token
+        # Check if email already exists
+        existing = db.query(models.Doctor).filter(
+            models.Doctor.email == doctor_data.email
+        ).first()
+        
+        # CASE 1: User exists AND has a valid invitation
+        if existing and invitation:
+            print(f"✅ Existing user found: {existing.email}")
+            
+            # Link existing doctor to hospital
+            hospital_doctor = models.HospitalDoctor(
+                hospital_admin_id=invitation.hospital_admin_id,
+                doctor_id=existing.id,
+                status='active',
+                accepted_at=datetime.utcnow()
+            )
+            db.add(hospital_doctor)
+            
+            # Give them Pro features
+            existing.subscription_plan = 'pro'
+            existing.subscription_status = 'active'
+            
+            # Mark invitation as used
+            invitation.status = 'used'
+            db.commit()
+            
+            # Create JWT token
+            access_token = create_access_token(data={"sub": str(existing.id)})
+            
+            return {
+                "access_token": access_token,
+                "refresh_token": None,
+                "token_type": "bearer",
+                "expires_in": 86400,
+                "remember_me": False,
+                "doctor_id": existing.id,
+                "email": existing.email,
+                "first_name": existing.first_name,
+                "last_name": existing.last_name,
+                "profile_picture": existing.profile_picture,
+                "role": existing.role,
+                "status": existing.status,
+                "email_verified": existing.email_verified,
+                "subscription_plan": 'pro'
+            }
+        
+        # CASE 2: User exists but NO invitation
+        elif existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # CASE 3: New user (create account)
+        # ... your existing signup code here ...
+        
+        # Don't forget to handle the invitation case for new users
+        is_hospital_invite = False
+        hospital_admin_id = None
+        subscription_plan = 'freemium'
+        
+        if invitation:
+            is_hospital_invite = True
+            hospital_admin_id = invitation.hospital_admin_id
+            subscription_plan = 'pro'
+            print(f"✅ New user with hospital invite from admin: {hospital_admin_id}")
+        
+        # Create new doctor
         verification_token = secrets.token_urlsafe(32)
+        user_role = 'pending'
+        user_status = 'pending'
         
         new_doctor = models.Doctor(
             email=doctor_data.email,
@@ -241,9 +293,8 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_doctor)
         
-        # ========== HANDLE HOSPITAL INVITATION ==========
+        # Link to hospital if invite
         if is_hospital_invite and hospital_admin_id:
-            # Link doctor to hospital
             hospital_doctor = models.HospitalDoctor(
                 hospital_admin_id=hospital_admin_id,
                 doctor_id=new_doctor.id,
@@ -251,44 +302,12 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
                 accepted_at=datetime.utcnow()
             )
             db.add(hospital_doctor)
-            
-            # Mark invitation as used
             invitation.status = 'used'
             db.commit()
-            
-            print(f"✅ Doctor {new_doctor.email} linked to hospital admin {hospital_admin_id}")
+            print(f"✅ New doctor {new_doctor.email} linked to hospital admin {hospital_admin_id}")
         
         # Create JWT token
         access_token = create_access_token(data={"sub": str(new_doctor.id)})
-        
-        # Send verification email
-        try:
-            verification_link = f"{BACKEND_URL}/verify-email-redirect?token={verification_token}"
-            send_email(
-                to=new_doctor.email,
-                subject="Verify Your Heart Alert Email Address",
-                html=f"""
-                <html>
-                <body style="font-family: Arial, sans-serif;">
-                    <div style="max-width: 480px; margin: auto; padding: 20px;">
-                        <h2 style="color: #7A9E7E;">Welcome to Heart Alert!</h2>
-                        <p>Hello {new_doctor.first_name},</p>
-                        <p>Please verify your email address to complete your registration.</p>
-                        <div style="text-align: center; margin: 30px 0;">
-                            <a href="{verification_link}"
-                               style="background-color: #7A9E7E; color: white; padding: 12px 24px;
-                                      text-decoration: none; border-radius: 8px;">
-                                Verify Email
-                            </a>
-                        </div>
-                        <p style="color: #888; font-size: 12px;">This link expires in 24 hours.</p>
-                    </div>
-                </body>
-                </html>
-                """
-            )
-        except Exception as e:
-            print(f"❌ Failed to send verification email: {e}")
         
         return {
             "access_token": access_token,
@@ -307,13 +326,14 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             "subscription_plan": subscription_plan
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/login")
 def login(
