@@ -73,6 +73,11 @@ class TokenResponse(BaseModel):
     last_name: str
     profile_picture: Optional[str] = None  # ← Add this
 
+    role: Optional[str] = None           # doctor, admin, assistant
+    status: Optional[str] = None          # pending, approved, suspended
+    subscription_plan: Optional[str] = "freemium"  # freemium, pro, hospital, hospital_pro
+    plan: Optional[str] = "freemium"      # alternative field for compatibility
+
 class ForgotPasswordRequest(BaseModel):
     email: str
 
@@ -101,7 +106,9 @@ class ProfileResponse(BaseModel):
     profile_picture: Optional[str] = None
     is_verified: bool
     created_at: datetime
-
+    role: Optional[str] = None
+    status: Optional[str] = None
+    subscription_plan: Optional[str] = "freemium"
 class PatientBase(BaseModel):
     first_name: str
     last_name: str
