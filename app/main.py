@@ -382,17 +382,17 @@ def check_email(request: dict, db: Session = Depends(get_db)):
     """Check if email already exists with enhanced validation"""
     email = request.get('email', '')
     
-    # Validate email format
+    # Validate email format (without normalization)
     is_valid, message = validate_email_address(email)
     if not is_valid:
         raise HTTPException(status_code=400, detail=message)
     
-    # Check if email exists
+    # Use the ORIGINAL email, NOT the normalized one
     doctor = db.query(models.Doctor).filter(models.Doctor.email == email).first()
     
     return {
         "exists": doctor is not None,
-        "normalized_email": message if is_valid else email
+        "email": email  # Return the original email
     }
 
 @app.post("/forgot-password")
