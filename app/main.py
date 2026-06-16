@@ -83,24 +83,22 @@ def root():
 # ========== AUTHENTICATION ENDPOINTS ==========
 # Add this endpoint (add before the @app.post("/signup") section)
 
-# Add this function near the top
-def validate_email_address(email: str) -> tuple[bool, str]:
+def validate_email_address(email: str):
     """
-    Validate email address with proper MX record checking
+    Simple email validation - NO normalization
     Returns (is_valid, message)
     """
-    # Check format
     if not email or '@' not in email:
         return (False, "Invalid email format")
     
-    # Use email-validator library for comprehensive validation
-    try:
-        # This checks format, deliverability, and domain existence
-        valid = validate_email(email, check_deliverability=True)
-        return (True, valid.normalized)
-    except EmailNotValidError as e:
-        return (False, str(e))
+    # Simple regex to validate email format
+    import re
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(pattern, email):
+        return (False, "Invalid email format")
     
+    # ✅ Return the ORIGINAL email, unchanged
+    return (True, email)
 
 # Add this near your other config (around line 30-40)
 PHONE_VERIFICATION_ENABLED = os.getenv("PHONE_VERIFICATION_ENABLED", "True").lower() == "true"
@@ -173,9 +171,11 @@ async def verify_phone(request: PhoneVerificationRequest):
 
 @app.post("/signup", response_model=TokenResponse)
 async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
-    """Register a new doctor - requires email verification"""
+    """Register a new doctor - NO email normalization"""
     
-    print(f"1. Received signup for: {doctor_data.email}")
+    # ✅ Use the EXACT email the user typed
+    email = doctor_data.email
+    print(f"1. Received signup for: {email}")
     print(f"2. Invite token: {doctor_data.invite_token}")
     
     try:
@@ -190,15 +190,15 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             
             if invitation:
                 print(f"✅ Valid invitation found for: {invitation.doctor_email}")
-                print(f"📧 Signup email: {doctor_data.email}")
+                print(f"📧 Signup email: {email}")
                 print(f"📧 Invitation email: {invitation.doctor_email}")
         
-        # Check if email already exists
+        # ✅ Check if email exists using EXACT email
         existing = db.query(models.Doctor).filter(
-            models.Doctor.email == doctor_data.email
+            models.Doctor.email == email
         ).first()
         
-        # CASE 1: User exists AND has a valid invitation
+        # If user exists and has invitation
         if existing and invitation:
             print(f"✅ Existing user found: {existing.email}")
             
@@ -211,15 +211,11 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             )
             db.add(hospital_doctor)
             
-            # Give them Pro features
             existing.subscription_plan = 'pro'
             existing.subscription_status = 'active'
-            
-            # Mark invitation as used
             invitation.status = 'used'
             db.commit()
             
-            # Create JWT token
             access_token = create_access_token(data={"sub": str(existing.id)})
             
             return {
@@ -239,14 +235,11 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
                 "subscription_plan": 'pro'
             }
         
-        # CASE 2: User exists but NO invitation
+        # If user exists and NO invitation
         elif existing:
             raise HTTPException(status_code=400, detail="Email already registered")
         
-        # CASE 3: New user (create account)
-        # ... your existing signup code here ...
-        
-        # Don't forget to handle the invitation case for new users
+        # New user
         is_hospital_invite = False
         hospital_admin_id = None
         subscription_plan = 'freemium'
@@ -257,13 +250,11 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             subscription_plan = 'pro'
             print(f"✅ New user with hospital invite from admin: {hospital_admin_id}")
         
-        # Create new doctor
+        # ✅ Save the EXACT email
         verification_token = secrets.token_urlsafe(32)
-        user_role = 'pending'
-        user_status = 'pending'
         
         new_doctor = models.Doctor(
-            email=doctor_data.email,
+            email=email,  # ← EXACT email, NOT normalized
             password_hash=hash_password(doctor_data.password),
             first_name=doctor_data.first_name,
             last_name=doctor_data.last_name,
@@ -277,8 +268,8 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             is_verified=True,
             terms_accepted=doctor_data.terms_accepted,
             terms_accepted_at=datetime.utcnow() if doctor_data.terms_accepted else None,
-            role=user_role,
-            status=user_status,
+            role='pending' if not invitation else 'doctor',
+            status='pending' if not invitation else 'approved',
             assigned_to=None,
             email_verified=False,
             email_verification_token=verification_token,
@@ -293,7 +284,6 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_doctor)
         
-        # Link to hospital if invite
         if is_hospital_invite and hospital_admin_id:
             hospital_doctor = models.HospitalDoctor(
                 hospital_admin_id=hospital_admin_id,
@@ -306,7 +296,6 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             db.commit()
             print(f"✅ New doctor {new_doctor.email} linked to hospital admin {hospital_admin_id}")
         
-        # Create JWT token
         access_token = create_access_token(data={"sub": str(new_doctor.id)})
         
         return {
@@ -316,7 +305,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
             "expires_in": 86400,
             "remember_me": False,
             "doctor_id": new_doctor.id,
-            "email": new_doctor.email,
+            "email": new_doctor.email,  # ← Returns EXACT email
             "first_name": new_doctor.first_name,
             "last_name": new_doctor.last_name,
             "profile_picture": new_doctor.profile_picture,
@@ -335,26 +324,24 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/login")
-def login(
-    login_data: DoctorLogin,
-    db: Session = Depends(get_db)
-):
-    """Login an existing doctor with remember me support"""
+def login(login_data: DoctorLogin, db: Session = Depends(get_db)):
+    """Login - NO email normalization"""
     
-    # Find doctor by email
-    doctor = db.query(models.Doctor).filter(models.Doctor.email == login_data.email).first()
+    # ✅ Use EXACT email
+    doctor = db.query(models.Doctor).filter(
+        models.Doctor.email == login_data.email
+    ).first()
+    
     if not doctor:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Verify password
     if not verify_password(login_data.password, doctor.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Create access token
     access_token = create_access_token(data={"sub": str(doctor.id)})
     
-    # Create refresh token if remember_me is True
     refresh_token = None
     if login_data.remember_me:
         refresh_token = create_refresh_token(data={"sub": str(doctor.id)})
@@ -367,7 +354,7 @@ def login(
         "remember_me": login_data.remember_me,
         "id": doctor.id,
         "doctor_id": doctor.id,
-        "email": doctor.email,
+        "email": doctor.email,  # ← Returns EXACT email
         "first_name": doctor.first_name,
         "last_name": doctor.last_name,
         "profile_picture": doctor.profile_picture,
@@ -376,7 +363,6 @@ def login(
         "subscription_plan": doctor.subscription_plan if doctor.subscription_plan else "freemium",
         "plan": doctor.subscription_plan if doctor.subscription_plan else "freemium",
     }
-
 @app.post("/check-email")
 def check_email(request: dict, db: Session = Depends(get_db)):
     """Check if email already exists with enhanced validation"""
