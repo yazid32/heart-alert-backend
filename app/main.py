@@ -3401,4 +3401,54 @@ async def accept_invitation(
     
     return {"message": "You have been successfully linked to the hospital!"}
 
+@app.post("/cancel-subscription")
+async def cancel_subscription(
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel user's subscription"""
     
+    if current_user.subscription_plan == 'freemium':
+        raise HTTPException(status_code=400, detail="You are on the free plan")
+    
+    # Check if subscription exists in Stripe
+    if current_user.stripe_customer_id:
+        try:
+            # Find active subscription in Stripe
+            subscriptions = stripe.Subscription.list(
+                customer=current_user.stripe_customer_id,
+                status='active',
+                limit=1
+            )
+            
+            if subscriptions.data:
+                # Cancel at period end
+                stripe.Subscription.modify(
+                    subscriptions.data[0].id,
+                    cancel_at_period_end=True
+                )
+                
+                # Update local subscription
+                db_sub = db.query(models.Subscription).filter(
+                    models.Subscription.user_id == current_user.id,
+                    models.Subscription.status == 'active'
+                ).first()
+                
+                if db_sub:
+                    db_sub.cancel_at_period_end = True
+                    db_sub.status = 'cancel_pending'
+        except Exception as e:
+            print(f"Stripe error: {e}")
+            # Continue with local cancellation even if Stripe fails
+    
+    # Update user's subscription
+    current_user.subscription_plan = 'freemium'
+    current_user.subscription_status = 'canceled'
+    current_user.subscription_expires_at = datetime.utcnow()
+    
+    db.commit()
+    
+    return {"message": "Subscription cancelled successfully"}
+
+
+
