@@ -2896,40 +2896,52 @@ async def invite_doctor(
     if current_user.subscription_plan != "hospital":
         raise HTTPException(status_code=403, detail="Hospital subscription required")
     
-    # Check subscription active
     if current_user.subscription_status != "active":
         raise HTTPException(status_code=403, detail="Hospital subscription expired")
     
-    # ========== CHECK IF DOCTOR EXISTS ==========
-    
+    # Check if doctor exists
     existing_doctor = db.query(models.Doctor).filter(
         models.Doctor.email == doctor_email
     ).first()
     
     if existing_doctor:
-        # Check if already linked to THIS hospital (active only)
-        already_linked = db.query(models.HospitalDoctor).filter(
+        # Check if already linked to THIS hospital (ANY status)
+        existing_link = db.query(models.HospitalDoctor).filter(
             models.HospitalDoctor.hospital_admin_id == current_user.id,
-            models.HospitalDoctor.doctor_id == existing_doctor.id,
-            models.HospitalDoctor.status == 'active'
+            models.HospitalDoctor.doctor_id == existing_doctor.id
         ).first()
         
-        if already_linked:
-            raise HTTPException(status_code=400, detail="This doctor is already in your hospital")
+        if existing_link:
+            # Reactivate if removed, or return error if already active
+            if existing_link.status == 'active':
+                raise HTTPException(status_code=400, detail="This doctor is already in your hospital")
+            else:
+                # Reactivate removed doctor
+                existing_link.status = 'active'
+                existing_link.accepted_at = datetime.utcnow()
+                existing_link.removed_at = None
+                
+                # Give them Pro features
+                existing_doctor.subscription_plan = 'pro'
+                existing_doctor.subscription_status = 'active'
+                db.commit()
+                
+                return {"message": f"Doctor {existing_doctor.email} reactivated successfully"}
         
-        # Check if doctor is linked to ANY OTHER hospital (active only)
+        # Check if doctor is linked to ANOTHER hospital (active only)
         linked_to_other = db.query(models.HospitalDoctor).filter(
             models.HospitalDoctor.doctor_id == existing_doctor.id,
+            models.HospitalDoctor.hospital_admin_id != current_user.id,
             models.HospitalDoctor.status == 'active'
         ).first()
         
         if linked_to_other:
             raise HTTPException(
                 status_code=400, 
-                detail=f"This doctor is already linked to another hospital."
+                detail="This doctor is already linked to another hospital."
             )
         
-        # ✅ Link existing doctor directly (no invitation needed)
+        # Link existing doctor directly
         hospital_doctor = models.HospitalDoctor(
             hospital_admin_id=current_user.id,
             doctor_id=existing_doctor.id,
@@ -2945,8 +2957,7 @@ async def invite_doctor(
         
         return {"message": f"Doctor {existing_doctor.email} added successfully"}
     
-    # ========== CHECK PENDING INVITATION ==========
-    
+    # Check pending invitation
     existing_invitation = db.query(models.HospitalInvitation).filter(
         models.HospitalInvitation.hospital_admin_id == current_user.id,
         models.HospitalInvitation.doctor_email == doctor_email,
@@ -2959,8 +2970,7 @@ async def invite_doctor(
             detail=f"An invitation has already been sent to {doctor_email}."
         )
     
-    # ========== CREATE NEW INVITATION ==========
-    
+    # Create new invitation
     token = secrets.token_urlsafe(32)
     invitation = models.HospitalInvitation(
         hospital_admin_id=current_user.id,
@@ -2972,7 +2982,7 @@ async def invite_doctor(
     db.add(invitation)
     db.commit()
     
-    # Create redirect link
+    # Send email
     invite_link = f"{BACKEND_URL}/invite-redirect?token={token}"
     
     try:
@@ -2984,8 +2994,8 @@ async def invite_doctor(
             <body style="font-family: Arial, sans-serif;">
                 <div style="max-width: 480px; margin: auto; padding: 20px;">
                     <h2 style="color: #7A9E7E;">You've been invited!</h2>
-                    <p>Dr. {current_user.first_name} {current_user.last_name} has invited you to join their hospital on Heart Alert.</p>
-                    <p>You will get <strong>FREE Pro access</strong> under their hospital subscription.</p>
+                    <p>Dr. {current_user.first_name} {current_user.last_name} has invited you to join their hospital.</p>
+                    <p>You will get <strong>FREE Pro access</strong>.</p>
                     <div style="text-align: center; margin: 30px 0;">
                         <a href="{invite_link}"
                            style="background-color: #7A9E7E; color: white; padding: 12px 24px;
@@ -2994,13 +3004,11 @@ async def invite_doctor(
                         </a>
                     </div>
                     <p style="color: #888; font-size: 12px;">This link expires in 7 days.</p>
-                    <p style="color: #888; font-size: 12px;">If you already have an account, you will be prompted to login.</p>
                 </div>
             </body>
             </html>
             """
         )
-        print(f"✅ Invitation email sent to {doctor_email}")
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
     
