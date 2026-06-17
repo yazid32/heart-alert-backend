@@ -2900,24 +2900,36 @@ async def invite_doctor(
     if current_user.subscription_status != "active":
         raise HTTPException(status_code=403, detail="Hospital subscription expired")
     
-    # ========== CHECK FOR DUPLICATES ==========
+    # ========== CHECK IF DOCTOR EXISTS ==========
     
-    # 1. Check if doctor already exists
     existing_doctor = db.query(models.Doctor).filter(
         models.Doctor.email == doctor_email
     ).first()
     
     if existing_doctor:
-        # Check if already linked to this hospital
+        # Check if already linked to THIS hospital (active only)
         already_linked = db.query(models.HospitalDoctor).filter(
             models.HospitalDoctor.hospital_admin_id == current_user.id,
-            models.HospitalDoctor.doctor_id == existing_doctor.id
+            models.HospitalDoctor.doctor_id == existing_doctor.id,
+            models.HospitalDoctor.status == 'active'
         ).first()
         
         if already_linked:
             raise HTTPException(status_code=400, detail="This doctor is already in your hospital")
         
-        # ✅ LINK EXISTING DOCTOR DIRECTLY
+        # Check if doctor is linked to ANY OTHER hospital (active only)
+        linked_to_other = db.query(models.HospitalDoctor).filter(
+            models.HospitalDoctor.doctor_id == existing_doctor.id,
+            models.HospitalDoctor.status == 'active'
+        ).first()
+        
+        if linked_to_other:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"This doctor is already linked to another hospital."
+            )
+        
+        # ✅ Link existing doctor directly (no invitation needed)
         hospital_doctor = models.HospitalDoctor(
             hospital_admin_id=current_user.id,
             doctor_id=existing_doctor.id,
@@ -2933,7 +2945,8 @@ async def invite_doctor(
         
         return {"message": f"Doctor {existing_doctor.email} added successfully"}
     
-    # 2. Check if there's already a pending invitation for this email
+    # ========== CHECK PENDING INVITATION ==========
+    
     existing_invitation = db.query(models.HospitalInvitation).filter(
         models.HospitalInvitation.hospital_admin_id == current_user.id,
         models.HospitalInvitation.doctor_email == doctor_email,
@@ -2943,17 +2956,17 @@ async def invite_doctor(
     if existing_invitation:
         raise HTTPException(
             status_code=400, 
-            detail=f"An invitation has already been sent to {doctor_email}. Please wait for them to respond or cancel the existing invitation."
+            detail=f"An invitation has already been sent to {doctor_email}."
         )
     
-    # ========== PROCEED WITH NEW INVITATION ==========
+    # ========== CREATE NEW INVITATION ==========
     
-    # Send invitation email
     token = secrets.token_urlsafe(32)
     invitation = models.HospitalInvitation(
         hospital_admin_id=current_user.id,
         doctor_email=doctor_email,
         token=token,
+        status='pending',
         expires_at=datetime.utcnow() + timedelta(days=7)
     )
     db.add(invitation)
@@ -2992,6 +3005,7 @@ async def invite_doctor(
         print(f"❌ Failed to send email: {e}")
     
     return {"message": f"Invitation sent to {doctor_email}"}
+
 
 @app.delete("/hospital/remove-doctor/{doctor_id}")
 def remove_hospital_doctor(
