@@ -3350,4 +3350,55 @@ def resend_hospital_invitation(
     
     return {"message": "Invitation resent successfully"}
 
+@app.post("/accept-invitation")
+async def accept_invitation(
+    request: dict,
+    current_user: models.Doctor = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Accept invitation for logged-in user"""
+    
+    invite_token = request.get('invite_token')
+    if not invite_token:
+        raise HTTPException(status_code=400, detail="Invitation token required")
+    
+    # Find the invitation
+    invitation = db.query(models.HospitalInvitation).filter(
+        models.HospitalInvitation.token == invite_token,
+        models.HospitalInvitation.expires_at > datetime.utcnow(),
+        models.HospitalInvitation.status == 'pending'
+    ).first()
+    
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invalid or expired invitation")
+    
+    # Check if already linked
+    existing_link = db.query(models.HospitalDoctor).filter(
+        models.HospitalDoctor.hospital_admin_id == invitation.hospital_admin_id,
+        models.HospitalDoctor.doctor_id == current_user.id
+    ).first()
+    
+    if existing_link:
+        invitation.status = 'used'
+        db.commit()
+        return {"message": "You are already linked to this hospital", "already_linked": True}
+    
+    # Link doctor to hospital
+    hospital_doctor = models.HospitalDoctor(
+        hospital_admin_id=invitation.hospital_admin_id,
+        doctor_id=current_user.id,
+        status='active',
+        accepted_at=datetime.utcnow()
+    )
+    db.add(hospital_doctor)
+    
+    # Give them Pro features
+    current_user.subscription_plan = 'pro'
+    current_user.subscription_status = 'active'
+    
+    invitation.status = 'used'
+    db.commit()
+    
+    return {"message": "You have been successfully linked to the hospital!"}
 
+    
