@@ -2902,7 +2902,7 @@ async def invite_doctor(
     
     # ========== CHECK FOR DUPLICATES ==========
     
-    # 1. Check if doctor already exists and is linked to this hospital
+    # 1. Check if doctor already exists
     existing_doctor = db.query(models.Doctor).filter(
         models.Doctor.email == doctor_email
     ).first()
@@ -2916,6 +2916,22 @@ async def invite_doctor(
         
         if already_linked:
             raise HTTPException(status_code=400, detail="This doctor is already in your hospital")
+        
+        # ✅ LINK EXISTING DOCTOR DIRECTLY
+        hospital_doctor = models.HospitalDoctor(
+            hospital_admin_id=current_user.id,
+            doctor_id=existing_doctor.id,
+            status='active',
+            accepted_at=datetime.utcnow()
+        )
+        db.add(hospital_doctor)
+        
+        # Give them Pro features
+        existing_doctor.subscription_plan = 'pro'
+        existing_doctor.subscription_status = 'active'
+        db.commit()
+        
+        return {"message": f"Doctor {existing_doctor.email} added successfully"}
     
     # 2. Check if there's already a pending invitation for this email
     existing_invitation = db.query(models.HospitalInvitation).filter(
@@ -2976,7 +2992,6 @@ async def invite_doctor(
         print(f"❌ Failed to send email: {e}")
     
     return {"message": f"Invitation sent to {doctor_email}"}
-
 
 @app.delete("/hospital/remove-doctor/{doctor_id}")
 def remove_hospital_doctor(
