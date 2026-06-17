@@ -3366,7 +3366,7 @@ async def accept_invitation(
     current_user: models.Doctor = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Accept invitation for logged-in user"""
+    """Accept invitation for logged-in user (like email verification)"""
     
     invite_token = request.get('invite_token')
     if not invite_token:
@@ -3382,16 +3382,17 @@ async def accept_invitation(
     if not invitation:
         raise HTTPException(status_code=404, detail="Invalid or expired invitation")
     
-    # Check if already linked
+    # Check if doctor is already linked to THIS hospital
     existing_link = db.query(models.HospitalDoctor).filter(
         models.HospitalDoctor.hospital_admin_id == invitation.hospital_admin_id,
-        models.HospitalDoctor.doctor_id == current_user.id
+        models.HospitalDoctor.doctor_id == current_user.id,
+        models.HospitalDoctor.status == 'active'
     ).first()
     
     if existing_link:
         invitation.status = 'used'
         db.commit()
-        return {"message": "You are already linked to this hospital", "already_linked": True}
+        return {"message": "Already linked to this hospital"}
     
     # Link doctor to hospital
     hospital_doctor = models.HospitalDoctor(
@@ -3402,14 +3403,14 @@ async def accept_invitation(
     )
     db.add(hospital_doctor)
     
-    # Give them Pro features
+    # Give Pro features
     current_user.subscription_plan = 'pro'
     current_user.subscription_status = 'active'
     
     invitation.status = 'used'
     db.commit()
     
-    return {"message": "You have been successfully linked to the hospital!"}
+    return {"message": "Invitation accepted successfully!"}
 
 @app.post("/cancel-subscription")
 async def cancel_subscription(
