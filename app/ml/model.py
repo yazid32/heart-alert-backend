@@ -6,8 +6,9 @@ Loads the trained Random Forest model and makes predictions
 import joblib
 import numpy as np
 import os
-
-MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'heart_disease_model.pkl')
+import xgboost as xgb
+MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', '..',
+ '"C:\Users\Kader\Documents\heart-disease-project\etat-de-lart\models\xgboost\xgboost_model.pkl"')
 
 try:
     model = joblib.load(MODEL_PATH)
