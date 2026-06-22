@@ -53,3 +53,4 @@ uvicorn==0.34.2
 gunicorn==23.0.0
 nest_asyncio==1.6.0
 stripe==12.4.0
+xgboost==2.0.3

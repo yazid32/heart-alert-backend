@@ -6,7 +6,7 @@ Loads the trained Random Forest model and makes predictions
 import joblib
 import numpy as np
 import os
-
+import xgboost as xgb
 MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'xgboost_model.pkl')
 
 try:
