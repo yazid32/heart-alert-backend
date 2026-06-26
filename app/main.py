@@ -149,7 +149,7 @@ PHONE_VERIFICATION_ENABLED = os.getenv("PHONE_VERIFICATION_ENABLED", "True").low
 
 @app.post("/verify-phone")
 @limiter.limit("5/minute")
-async def verify_phone(request: Request, phone_req:: PhoneVerificationRequest):
+async def verify_phone(request: Request, phone_req: PhoneVerificationRequest):
     """
     Verify if a phone number is valid using NumLookup API
     Free tier: 2,000 requests/month
