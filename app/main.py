@@ -149,12 +149,12 @@ PHONE_VERIFICATION_ENABLED = os.getenv("PHONE_VERIFICATION_ENABLED", "True").low
 
 @app.post("/verify-phone")
 @limiter.limit("5/minute")
-async def verify_phone(request: PhoneVerificationRequest):
+async def verify_phone(request: Request, phone_req:: PhoneVerificationRequest):
     """
     Verify if a phone number is valid using NumLookup API
     Free tier: 2,000 requests/month
     """
-    phone_number = request.phone_number
+    phone_number = phone_req.phone_number
     
     # Remove any spaces and ensure proper format
     phone_number = phone_number.replace(" ", "")
@@ -216,7 +216,7 @@ async def verify_phone(request: PhoneVerificationRequest):
 
 @app.post("/signup", response_model=TokenResponse)
 @limiter.limit("10/minute")
-async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
+async def signup(request: Request, doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     """Register a new doctor - NO email normalization"""
     
     # ✅ Use the EXACT email the user typed
@@ -409,7 +409,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     
 @app.post("/login")
 @limiter.limit("10/minute")
-def login(login_data: DoctorLogin, db: Session = Depends(get_db)):
+def login(request: Request, login_data: DoctorLogin, db: Session = Depends(get_db)):
     """Login - NO email normalization"""
     
     # ✅ Use EXACT email
@@ -466,7 +466,7 @@ def check_email(request: dict, db: Session = Depends(get_db)):
 
 @app.post("/forgot-password")
 @limiter.limit("3/minute")
-async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+async def forgot_password(request: Request, forgot_data: ForgotPasswordRequest, db: Session = Depends(get_db)):
     doctor = db.query(models.Doctor).filter(models.Doctor.email == request.email).first()
     
     if not doctor:
@@ -807,7 +807,7 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
     return HTMLResponse(content=html_content)
 @app.post("/reset-password")
 @limiter.limit("5/minute")
-def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+def reset_password(request: Request, reset_data: ResetPasswordRequest, db: Session = Depends(get_db)):
     doctor = db.query(models.Doctor).filter(
         models.Doctor.reset_token == request.token,
         models.Doctor.reset_token_expiry > datetime.utcnow()
@@ -1967,7 +1967,7 @@ def get_assigned_doctor(
 @app.post("/send-verification-email")
 @limiter.limit("3/minute")
 async def send_verification_email(
-    request: SendVerificationEmailRequest,
+    request: Request, email_req: SendVerificationEmailRequest, 
     db: Session = Depends(get_db)
 ):
     """Send a verification email to the user"""
@@ -2240,7 +2240,7 @@ class SupportTicketCreate(BaseModel):
 @app.post("/support/create")
 @limiter.limit("5/minute")  # ← Add this
 async def create_support_ticket(
-    ticket: SupportTicketCreate,
+    request: Request, ticket: SupportTicketCreate, 
     db: Session = Depends(get_db)
 ):
     """Create a support ticket (works with or without login)"""
@@ -2529,7 +2529,7 @@ def get_admin_stats(
 @app.post("/contact-support")
 @limiter.limit("3/minute")  # ← Add this
 async def contact_support(
-    request: ContactSupportRequest,
+    request: Request, contact_req: ContactSupportRequest, 
     db: Session = Depends(get_db)
 ):
     """Send a message to admin (no login required)"""
@@ -3577,7 +3577,7 @@ class ChatResponse(BaseModel):
 @app.post("/chat")
 @limiter.limit("30/minute")
 async def chat(
-    request: ChatRequest,
+    request: Request, chat_req: ChatRequest,
     current_user: models.Doctor = Depends(require_role(['doctor', 'assistant', 'admin'])),
     db: Session = Depends(get_db)
 ):
