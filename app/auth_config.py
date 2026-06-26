@@ -5,18 +5,18 @@ from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTError
 import secrets
 
-# ✅ Use bcrypt with proper error handling
-try:
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-except Exception as e:
-    print(f"⚠️ Bcrypt not available, falling back to sha256_crypt: {e}")
-    pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
+# ✅ Use a context that supports multiple hash schemes
+# This allows both bcrypt (new) and sha256_crypt (old) to work
+pwd_context = CryptContext(
+    schemes=["bcrypt", "sha256_crypt"],  # ✅ Both formats supported
+    deprecated="auto",
+    bcrypt__default_rounds=12,  # ✅ Good balance of security and performance
+)
 
 # ✅ Read JWT secret from environment
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
 if not SECRET_KEY:
-    # 🔴 Critical: Generate a temporary one for local dev only
     if os.getenv("ENVIRONMENT") == "production" or os.getenv("RENDER"):
         raise ValueError(
             "❌ JWT_SECRET_KEY is required in production!\n"
@@ -24,34 +24,58 @@ if not SECRET_KEY:
             "https://dashboard.render.com/"
         )
     else:
-        # Local development: generate a random key
         SECRET_KEY = secrets.token_urlsafe(32)
         print(f"⚠️  JWT_SECRET_KEY generated for local development only")
         print(f"   Key: {SECRET_KEY}")
         print(f"   ⚠️  Do not use this in production!")
 
-# ✅ Validate key length
 if len(SECRET_KEY) < 32:
     print(f"⚠️  WARNING: JWT_SECRET_KEY is only {len(SECRET_KEY)} characters long.")
     print("   Minimum recommended: 32 characters.")
-    print("   Generate a new one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'")
 
-# ✅ Configuration from environment with defaults
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
-# ✅ Log status (don't expose the key)
 print(f"✅ Auth configuration loaded (Algorithm: {ALGORITHM})")
+print(f"✅ Supported hash schemes: {pwd_context.schemes()}")
 
-# ... rest of the functions remain the same ...
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt/sha256"""
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt (preferred)"""
+    return pwd_context.hash(password, scheme="bcrypt")  # ✅ Explicitly use bcrypt for new hashes
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its hash (supports both bcrypt and sha256_crypt)"""
+    try:
+        # ✅ This will try all schemes in order
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        print(f"⚠️ Password verification error: {e}")
+        # If verification fails, try to re-hash with bcrypt (for old sha256 users)
+        # This is a fallback - if it works, we'll re-hash on next login
+        return False
+
+def verify_and_upgrade_password(plain_password: str, hashed_password: str) -> tuple[bool, str | None]:
+    """
+    Verify password and return new hash if upgrade needed.
+    Returns: (is_valid, new_hash_or_none)
+    """
+    try:
+        # Check if hash needs upgrading (old sha256_crypt)
+        needs_upgrade = pwd_context.needs_update(hashed_password)
+        
+        # Verify the password
+        is_valid = pwd_context.verify(plain_password, hashed_password)
+        
+        if is_valid and needs_upgrade:
+            # Re-hash with bcrypt
+            new_hash = hash_password(plain_password)
+            return (True, new_hash)
+        
+        return (is_valid, None)
+    except Exception as e:
+        print(f"⚠️ Password verification error: {e}")
+        return (False, None)
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     """Create a JWT token"""
@@ -74,22 +98,18 @@ def decode_access_token(token: str):
     """Decode and verify a JWT token with proper error handling"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        # Check if it's an access token
         if payload.get("type") != "access":
             return None
         return payload
     except ExpiredSignatureError:
-        # Token expired - specific error for better handling
         return {"error": "expired"}
     except JWTError:
-        # Invalid token - generic error
         return None
 
 def decode_refresh_token(token: str):
     """Decode and verify a refresh token"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        # Check if it's a refresh token
         if payload.get("type") != "refresh":
             return None
         return payload
