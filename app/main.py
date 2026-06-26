@@ -3577,23 +3577,24 @@ class ChatResponse(BaseModel):
 @app.post("/chat")
 @limiter.limit("30/minute")
 async def chat(
-    request: Request, chat_req: ChatRequest,
+    request: Request,  # ✅ FastAPI Request object (for rate limiting)
+    chat_req: ChatRequest,  # ✅ Your actual request data
     current_user: models.Doctor = Depends(require_role(['doctor', 'assistant', 'admin'])),
     db: Session = Depends(get_db)
 ):
     """
     Send a message to the chatbot with optional patient context.
     """
-    # Check if API key is configured
+    # ✅ Use chat_req, not request
     if not OPENROUTER_API_KEY:
         raise HTTPException(
             status_code=503,
             detail="Chatbot service is currently unavailable. Please try again later."
         )
     
-    # Log the request (for audit)
+    # ✅ Log using chat_req
     print(f"📱 Chat request from user {current_user.id} ({current_user.email})")
-    print(f"📝 Message length: {len(request.message)}")
+    print(f"📝 Message length: {len(chat_req.message)}")
     
     # Build the system prompt with medical disclaimer
     system_prompt = """You are HeartBot, a medical AI assistant for healthcare professionals.
@@ -3621,19 +3622,18 @@ async def chat(
         {"role": "system", "content": system_prompt}
     ]
     
-    # Add context if provided
-    if request.context:
-        context_message = _build_context_prompt(request.context)
+    # ✅ Add context if provided (using chat_req)
+    if chat_req.context:
+        context_message = _build_context_prompt(chat_req.context)
         messages.append({"role": "system", "content": context_message})
     
     # Add conversation history
-    if request.history:
-        # Filter to last 10 messages to save tokens
-        for msg in request.history[-10:]:
+    if chat_req.history:
+        for msg in chat_req.history[-10:]:
             messages.append(msg)
     
-    # Add user message
-    messages.append({"role": "user", "content": request.message})
+    # ✅ Add user message (using chat_req)
+    messages.append({"role": "user", "content": chat_req.message})
     
     try:
         # Call OpenRouter API
@@ -3664,7 +3664,6 @@ async def chat(
             # Validate and sanitize response
             reply = _sanitize_response(reply)
             
-            # Log success
             print(f"✅ Chat response sent (length: {len(reply)})")
             
             return ChatResponse(
@@ -3684,4 +3683,4 @@ async def chat(
         raise HTTPException(504, "The AI service is taking too long to respond. Please try again.")
     except Exception as e:
         print(f"❌ Chat error: {e}")
-        raise HTTPException(500, "An unexpected error occurred. Please try again.")
+        raise HTTPException(500, f"An unexpected error occurred: {str(e)}")
