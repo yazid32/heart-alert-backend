@@ -2,6 +2,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
+from fastapi.responses import JSONResponse  # Add this import
 from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File, Header, Request
 from fastapi.responses import HTMLResponse
 import shutil
@@ -10,13 +11,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
+from app.middleware import HTTPSRedirectMiddleware, SecurityHeadersMiddleware
 from app.routers import auth
 from app.ml.model import predict_heart_disease
 from app.database import get_db
 from app import models
+# Add import
+from app.validators import validate_file_upload, validate_password_strength
 from app.auth_config import hash_password, verify_password, create_access_token, create_refresh_token, decode_access_token
 import re
 from datetime import datetime, timedelta
+# Add at top of main.py
+from app.rate_limiter import limiter
+from slowapi.errors import RateLimitExceeded
 import secrets
 from app.email_config import send_email
 from pydantic import BaseModel
@@ -54,17 +61,54 @@ PHONE_VERIFICATION_ENABLED = os.getenv("PHONE_VERIFICATION_ENABLED", "True").low
 
 
 app = FastAPI(title="Heart Disease Prediction API")
+# ✅ Add rate limit exceeded handler
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please try again later."},
+        headers={"Retry-After": str(exc.retry_after)}
+    )
 app.include_router(auth.router)
-
 # Add CORS middleware
+# ========== CORS CONFIGURATION ==========
+# ✅ Read allowed origins from environment
+ALLOWED_ORIGINS_STR = os.getenv("ALLOWED_ORIGINS", "")
+
+if ALLOWED_ORIGINS_STR:
+    ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_STR.split(",") if origin.strip()]
+else:
+    # Default based on environment
+    if os.getenv("RENDER"):
+        # On Render, only allow your frontend domain
+        ALLOWED_ORIGINS = [
+            "https://heartalert.netlify.app",  # Your Netlify frontend
+        ]
+        # If you have a custom domain, add it here
+        if os.getenv("FRONTEND_URL"):
+            ALLOWED_ORIGINS.append(os.getenv("FRONTEND_URL"))
+    else:
+        # Local development
+        ALLOWED_ORIGINS = [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ]
+
+print(f"✅ CORS allowed origins: {ALLOWED_ORIGINS}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["Content-Disposition"],
+    max_age=3600,
 )
-
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(HTTPSRedirectMiddleware)
 # Setup security
 security = HTTPBearer()
 
@@ -104,6 +148,7 @@ def validate_email_address(email: str):
 PHONE_VERIFICATION_ENABLED = os.getenv("PHONE_VERIFICATION_ENABLED", "True").lower() == "true"
 
 @app.post("/verify-phone")
+@limiter.limit("5/minute")
 async def verify_phone(request: PhoneVerificationRequest):
     """
     Verify if a phone number is valid using NumLookup API
@@ -170,6 +215,7 @@ async def verify_phone(request: PhoneVerificationRequest):
     
 
 @app.post("/signup", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     """Register a new doctor - NO email normalization"""
     
@@ -362,6 +408,7 @@ async def signup(doctor_data: DoctorSignup, db: Session = Depends(get_db)):
     
     
 @app.post("/login")
+@limiter.limit("10/minute")
 def login(login_data: DoctorLogin, db: Session = Depends(get_db)):
     """Login - NO email normalization"""
     
@@ -418,6 +465,7 @@ def check_email(request: dict, db: Session = Depends(get_db)):
     }
 
 @app.post("/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
     doctor = db.query(models.Doctor).filter(models.Doctor.email == request.email).first()
     
@@ -758,6 +806,7 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
     
     return HTMLResponse(content=html_content)
 @app.post("/reset-password")
+@limiter.limit("5/minute")
 def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
     doctor = db.query(models.Doctor).filter(
         models.Doctor.reset_token == request.token,
@@ -845,7 +894,8 @@ async def upload_profile_picture(
     db: Session = Depends(get_db)
 ):
     """Upload profile picture for the current doctor"""
-    
+    # ✅ Use validator
+    validate_file_upload(file, file_type="image")
     allowed_extensions = ['.png', '.jpg', '.jpeg']
     file_ext = os.path.splitext(file.filename)[1].lower()
     
@@ -1443,26 +1493,6 @@ def reject_request(
     
     return {"message": "Request rejected"}
 
-# ========== CHATBOT ENDPOINT ==========
-
-import httpx
-
-GEMINI_API_KEY = "your-key"
-
-@app.post("/chat")
-async def chat(
-    message: str, 
-    current_doctor: models.Doctor = Depends(require_role(['doctor', 'assistant', 'admin'])),
-    current_user: models.Doctor = Depends(require_status(['approved'])),
-):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent",
-            params={"key": GEMINI_API_KEY},
-            json={"contents": [{"parts": [{"text": message}]}]}
-        )
-    return response.json()
-
 # ========== ADMIN ENDPOINTS ==========
 
 @app.get("/admin/doctors")
@@ -1935,6 +1965,7 @@ def get_assigned_doctor(
     # ========== EMAIL VERIFICATION ENDPOINTS ==========
 
 @app.post("/send-verification-email")
+@limiter.limit("3/minute")
 async def send_verification_email(
     request: SendVerificationEmailRequest,
     db: Session = Depends(get_db)
@@ -2207,6 +2238,7 @@ class SupportTicketCreate(BaseModel):
     message: str
 
 @app.post("/support/create")
+@limiter.limit("5/minute")  # ← Add this
 async def create_support_ticket(
     ticket: SupportTicketCreate,
     db: Session = Depends(get_db)
@@ -2495,6 +2527,7 @@ def get_admin_stats(
 
 
 @app.post("/contact-support")
+@limiter.limit("3/minute")  # ← Add this
 async def contact_support(
     request: ContactSupportRequest,
     db: Session = Depends(get_db)
@@ -3461,5 +3494,194 @@ async def cancel_subscription(
     
     return {"message": "Subscription cancelled successfully"}
 
+# ========== CHATBOT CONFIGURATION ==========
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
+
+if OPENROUTER_API_KEY:
+    print("✅ OpenRouter API key configured")
+else:
+    print("⚠️ OPENROUTER_API_KEY not set. Chatbot will be disabled.")
+# ========== CHATBOT ENDPOINT ==========
+import uuid
+from typing import Dict, Any, List, Optional
+
+def _build_context_prompt(context: Dict[str, Any]) -> str:
+    """Build a context prompt from patient data."""
+    patient_name = context.get('patient_name', 'Patient')
+    risk_score = (context.get('risk_score', 0.0) or 0.0) * 100
+    risk_category = context.get('risk_category', 'Unknown')
+    age = context.get('age', 'Not specified')
+    gender = context.get('gender', 'Not specified')
+    
+    # Format gender
+    if gender == 1:
+        gender = 'Male'
+    elif gender == 0:
+        gender = 'Female'
+    
+    # Build clinical parameters
+    params = []
+    param_map = {
+        'Chest Pain Type': context.get('chest_pain_type'),
+        'Resting Blood Pressure': context.get('resting_bp'),
+        'Cholesterol': context.get('cholesterol'),
+        'Fasting Blood Sugar': context.get('fasting_blood_sugar'),
+        'Resting ECG': context.get('resting_ecg'),
+        'Max Heart Rate': context.get('max_heart_rate'),
+        'Exercise Angina': context.get('exercise_angina'),
+        'ST Depression': context.get('st_depression'),
+        'ST Slope': context.get('st_slope'),
+    }
+    
+    for key, value in param_map.items():
+        if value is not None and str(value).strip():
+            params.append(f"- {key}: {value}")
+    
+    return f"""PATIENT CONTEXT:
+- Name: {patient_name}
+- Age: {age}
+- Gender: {gender}
+- Risk Score: {risk_score:.0f}%
+- Risk Category: {risk_category}
+
+CLINICAL PARAMETERS:
+{chr(10).join(params) if params else 'None provided'}
+
+Please provide professional medical insights based on this patient data. Be concise, accurate, and evidence-based."""
 
 
+def _sanitize_response(text: str) -> str:
+    """Sanitize and validate the AI response."""
+    # Remove any markdown that might be dangerous
+    # Keep it simple - just trim and ensure it's not empty
+    text = text.strip()
+    if not text:
+        return "I apologize, but I received an empty response. Please try again."
+    
+    # Add medical disclaimer if not present
+    disclaimer = "⚕️ **Medical Disclaimer:** This information is for clinical reference only. Please verify with current guidelines and consult appropriate specialists."
+    if "disclaimer" not in text.lower() and "medical" not in text.lower():
+        text = f"{text}\n\n---\n\n{disclaimer}"
+    
+    return text
+class ChatRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
+    history: Optional[List[Dict[str, str]]] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    message_id: Optional[str] = None
+
+@app.post("/chat")
+@limiter.limit("30/minute")
+async def chat(
+    request: ChatRequest,
+    current_user: models.Doctor = Depends(require_role(['doctor', 'assistant', 'admin'])),
+    db: Session = Depends(get_db)
+):
+    """
+    Send a message to the chatbot with optional patient context.
+    """
+    # Check if API key is configured
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Chatbot service is currently unavailable. Please try again later."
+        )
+    
+    # Log the request (for audit)
+    print(f"📱 Chat request from user {current_user.id} ({current_user.email})")
+    print(f"📝 Message length: {len(request.message)}")
+    
+    # Build the system prompt with medical disclaimer
+    system_prompt = """You are HeartBot, a medical AI assistant for healthcare professionals.
+
+**Medical Disclaimer:**
+- This is NOT a medical diagnosis.
+- Always consult a qualified healthcare professional.
+- Information is for educational and reference purposes only.
+- Clinical judgment should always take precedence.
+- Verify all information before clinical use.
+- Never rely solely on AI for medical decisions.
+- In emergencies, call emergency services immediately.
+
+**Guidelines:**
+- Provide evidence-based information.
+- Be concise and accurate.
+- Use clear, professional language.
+- When uncertain, state that you don't know.
+- Do not provide specific drug dosages.
+- Do not diagnose specific conditions.
+- Encourage professional consultation."""
+    
+    # Build messages array
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
+    
+    # Add context if provided
+    if request.context:
+        context_message = _build_context_prompt(request.context)
+        messages.append({"role": "system", "content": context_message})
+    
+    # Add conversation history
+    if request.history:
+        # Filter to last 10 messages to save tokens
+        for msg in request.history[-10:]:
+            messages.append(msg)
+    
+    # Add user message
+    messages.append({"role": "user", "content": request.message})
+    
+    try:
+        # Call OpenRouter API
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": os.getenv("FRONTEND_URL", "https://heartalert.netlify.app"),
+                    "X-Title": "Heart Alert",
+                },
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": messages,
+                    "max_tokens": 750,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "stream": False,
+                }
+            )
+        
+        # Handle API response
+        if response.status_code == 200:
+            data = response.json()
+            reply = data['choices'][0]['message']['content']
+            
+            # Validate and sanitize response
+            reply = _sanitize_response(reply)
+            
+            # Log success
+            print(f"✅ Chat response sent (length: {len(reply)})")
+            
+            return ChatResponse(
+                response=reply,
+                message_id=str(uuid.uuid4())
+            )
+        elif response.status_code == 401:
+            raise HTTPException(401, "API authentication failed. Please contact support.")
+        elif response.status_code == 402:
+            raise HTTPException(402, "API quota exceeded. Please try again later.")
+        else:
+            print(f"❌ OpenRouter API error: {response.status_code} - {response.text}")
+            raise HTTPException(response.status_code, "Chat service error")
+            
+    except httpx.TimeoutException:
+        print("❌ Chat timeout")
+        raise HTTPException(504, "The AI service is taking too long to respond. Please try again.")
+    except Exception as e:
+        print(f"❌ Chat error: {e}")
+        raise HTTPException(500, "An unexpected error occurred. Please try again.")
