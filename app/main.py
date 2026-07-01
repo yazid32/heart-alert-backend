@@ -2789,7 +2789,16 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             if session.get("subscription"):
                 try:
                     stripe_sub = stripe.Subscription.retrieve(session["subscription"])
-                    print(f"📅 Subscription period: {stripe_sub.current_period_start} to {stripe_sub.current_period_end}")
+                    # Since Stripe API version 2025-03-31 ("Basil"), current_period_start/end
+                    # live on the subscription item, not the top-level Subscription object.
+                    item = stripe_sub["items"]["data"][0]
+                    period_start = item["current_period_start"]
+                    period_end = item["current_period_end"]
+                    print(f"📅 Subscription period: {period_start} to {period_end}")
+                    
+                    # Keep the user's expiry in sync with the real Stripe period
+                    user.subscription_expires_at = datetime.fromtimestamp(period_end)
+                    db.commit()
                     
                     # Save to subscriptions table
                     sub = models.Subscription(
@@ -2797,8 +2806,8 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                         stripe_subscription_id=session["subscription"],
                         plan_name=plan_name,
                         status="active",
-                        current_period_start=datetime.fromtimestamp(stripe_sub.current_period_start),
-                        current_period_end=datetime.fromtimestamp(stripe_sub.current_period_end)
+                        current_period_start=datetime.fromtimestamp(period_start),
+                        current_period_end=datetime.fromtimestamp(period_end)
                     )
                     db.add(sub)
                     db.commit()
@@ -2834,13 +2843,24 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         
         if sub:
             sub.status = subscription_obj["status"]
-            sub.current_period_end = datetime.fromtimestamp(subscription_obj["current_period_end"])
+            # Since Stripe API version 2025-03-31 ("Basil"), current_period_end lives
+            # on the subscription item, not the top-level subscription object.
+            new_period_end = None
+            try:
+                items_data = subscription_obj.get("items", {}).get("data", [])
+                if items_data and items_data[0].get("current_period_end"):
+                    new_period_end = datetime.fromtimestamp(items_data[0]["current_period_end"])
+                    sub.current_period_end = new_period_end
+            except Exception as e:
+                print(f"⚠️ Could not read current_period_end from subscription.updated event: {e}")
             sub.cancel_at_period_end = subscription_obj["cancel_at_period_end"]
             
             # Update user's subscription status
             user = db.query(models.Doctor).filter(models.Doctor.id == sub.user_id).first()
             if user:
                 user.subscription_status = subscription_obj["status"]
+                if new_period_end:
+                    user.subscription_expires_at = new_period_end
                 if subscription_obj["status"] != "active":
                     user.subscription_plan = "freemium"
             
