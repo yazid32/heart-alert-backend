@@ -2719,13 +2719,11 @@ async def create_checkout_session(
             }
         )
         
-        # ✅ DEMO MODE: Immediately upgrade user to Pro (for testing)
-        # ⚠️ Remove this line when webhook is working in production ⚠️
-        current_user.subscription_plan = request.plan_name
-        current_user.subscription_status = "active"
-        current_user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
-        db.commit()
-        print(f"✅ DEMO MODE: User {current_user.email} upgraded to {request.plan_name}")
+        # Plan is upgraded by the /stripe-webhook handler once Stripe confirms
+        # payment (checkout.session.completed) — not here. Do not set
+        # subscription_plan on this endpoint; it would grant access before
+        # the user has actually paid.
+        print(f"✅ Checkout session created for {current_user.email}, plan={request.plan_name}, awaiting webhook confirmation")
         
         return {"session_url": checkout_session.url}
         
