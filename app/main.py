@@ -467,7 +467,7 @@ def check_email(request: dict, db: Session = Depends(get_db)):
 @app.post("/forgot-password")
 @limiter.limit("3/minute")
 async def forgot_password(request: Request, forgot_data: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    doctor = db.query(models.Doctor).filter(models.Doctor.email == request.email).first()
+    doctor = db.query(models.Doctor).filter(models.Doctor.email == forgot_data.email).first()
     
     if not doctor:
         return {"message": "If email exists, reset link has been sent"}
@@ -1972,7 +1972,7 @@ async def send_verification_email(
 ):
     """Send a verification email to the user"""
     
-    doctor = db.query(models.Doctor).filter(models.Doctor.email == request.email).first()
+    doctor = db.query(models.Doctor).filter(models.Doctor.email == email_req.email).first()
     
     if not doctor:
         raise HTTPException(status_code=404, detail="User not found")
@@ -2550,14 +2550,14 @@ async def contact_support(
     <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
         <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
             <h2 style="color: #7A9E7E;">Heart Alert - Support Request</h2>
-            <p style="color: #444;"><strong>From:</strong> {request.name} ({request.email})</p>
-            <p style="color: #444;"><strong>Subject:</strong> {request.subject}</p>
+            <p style="color: #444;"><strong>From:</strong> {contact_req.name} ({contact_req.email})</p>
+            <p style="color: #444;"><strong>Subject:</strong> {contact_req.subject}</p>
             <hr>
             <p style="color: #444;"><strong>Message:</strong></p>
             <p style="color: #444; background: #f9f9f9; padding: 16px; border-radius: 8px;">
-                {request.message}
+                {contact_req.message}
             </p>
-            <p style="color: #888; font-size: 12px;">Reply to: {request.email}</p>
+            <p style="color: #888; font-size: 12px;">Reply to: {contact_req.email}</p>
         </div>
     </body>
     </html>
@@ -2566,24 +2566,24 @@ async def contact_support(
     for admin_email in admin_emails:
         send_email(
             to=admin_email,
-            subject=f"Support Request: {request.subject}",
+            subject=f"Support Request: {contact_req.subject}",
             html=email_body
         )
     
     # Also send confirmation to user
     send_email(
-        to=request.email,
+        to=contact_req.email,
         subject="Heart Alert - We received your message",
         html=f"""
         <html>
         <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 40px;">
             <div style="max-width: 480px; margin: auto; background: white; border-radius: 12px; padding: 40px;">
                 <h2 style="color: #7A9E7E;">Thank you for contacting us</h2>
-                <p style="color: #444;">Dear {request.name},</p>
+                <p style="color: #444;">Dear {contact_req.name},</p>
                 <p style="color: #444;">We have received your message and will respond within 24-48 hours.</p>
                 <p style="color: #444;"><strong>Your message:</strong></p>
                 <p style="color: #444; background: #f9f9f9; padding: 16px; border-radius: 8px;">
-                    {request.message}
+                    {contact_req.message}
                 </p>
                 <p style="color: #888; font-size: 12px;">Best regards,<br>Heart Alert Team</p>
             </div>
