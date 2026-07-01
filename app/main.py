@@ -804,7 +804,15 @@ def redirect_reset(token: str, user_agent: str = Header(None)):
         </html>
         """
     
-    return HTMLResponse(content=html_content)
+    response = HTMLResponse(content=html_content)
+    # This page relies on an inline <script> for validation and password reset;
+    # the global CSP (default-src 'self') blocks inline scripts, which breaks
+    # the page silently. Relax it just for this response.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+    )
+    return response
 @app.post("/reset-password")
 @limiter.limit("5/minute")
 def reset_password(request: Request, reset_data: ResetPasswordRequest, db: Session = Depends(get_db)):
@@ -2027,7 +2035,7 @@ async def send_verification_email(
 @app.get("/verify-email-redirect")
 def verify_email_redirect(token: str):
     """Page that email button lands on - automatically verifies and shows result"""
-    return HTMLResponse(content=f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -2161,7 +2169,16 @@ def verify_email_redirect(token: str):
         </script>
     </body>
     </html>
-    """)
+    """
+    response = HTMLResponse(content=html_content)
+    # This page's inline <script> calls /verify-email automatically; the global
+    # CSP (default-src 'self') silently blocks inline scripts, which left users
+    # stuck on the spinner forever with no error. Relax it just for this response.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+    )
+    return response
 
 @app.post("/verify-email")
 def verify_email(
@@ -3344,7 +3361,17 @@ def invite_redirect(token: str, user_agent: Optional[str] = Header(None)):  # âœ
         </html>
         """
     
-    return HTMLResponse(content=html_content)
+    response = HTMLResponse(content=html_content)
+    if is_mobile:
+        # The mobile branch above uses an inline <script> to auto-redirect into
+        # the app; the global CSP (default-src 'self') silently blocks inline
+        # scripts, so the auto-redirect never fired â€” users had to tap "Open App"
+        # manually every time. Relax it just for this response.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+        )
+    return response
 
 @app.post("/hospital/resend-invitation")
 def resend_hospital_invitation(

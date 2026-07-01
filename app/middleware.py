@@ -26,6 +26,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        # setdefault: some routes (e.g. the reset-password / email-verification /
+        # invite-redirect HTML pages) need to set their own, more permissive CSP
+        # to allow the inline <script> they render. Don't clobber that here.
+        response.headers.setdefault("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
         
         return response
